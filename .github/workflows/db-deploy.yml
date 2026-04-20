@@ -1,0 +1,48 @@
+name: db-deploy
+
+# Pushes pending migrations to the linked Supabase project whenever the
+# migration set or Supabase config changes on the default branch.
+#
+# Required GitHub Action secrets:
+#   SUPABASE_ACCESS_TOKEN  - personal access token from
+#                            https://supabase.com/dashboard/account/tokens
+#   SUPABASE_DB_PASSWORD   - the database password for the project
+#                            (Project Settings → Database → "Database password")
+#   SUPABASE_PROJECT_ID    - the project ref, e.g. "abcdefghijklmnop"
+#                            (Project Settings → General → "Reference ID")
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/config.toml"
+      - "supabase/seed.sql"
+      - ".github/workflows/db-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: db-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Push migrations
+        run: supabase db push --linked

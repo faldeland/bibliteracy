@@ -1,0 +1,11 @@
+{
+  "count": 343518,
+  "minVotesFilter": 0,
+  "votesMin": 0,
+  "votesMax": 1276,
+  "totalVerses": 31102,
+  "builtAt": "2026-04-20T01:05:29.873Z",
+  "sourceSha256": "51d92e6aed62b38934b44776c67378b02515df5eb6744cb053c158e053c2fddb",
+  "sourceUrl": "https://a.openbible.info/data/cross-references.zip",
+  "license": "CC BY 4.0 — © OpenBible.info"
+}

@@ -1,0 +1,48 @@
+---
+description: Folder/file structure and placement rules for this Next.js + Supabase repo
+alwaysApply: true
+---
+
+# Project structure
+
+Keep the tree below clean. When adding a file, pick the existing home — do not invent siblings of `app/`, `lib/`, `components/`.
+
+```
+app/                Next.js App Router only — pages, layouts, route handlers
+  api/<domain>/route.ts   server route handlers (one folder per domain)
+components/<domain>/      React components grouped by feature (grid, live, ...)
+lib/<domain>/             pure TS modules: data, parsers, clients, utils
+  supabase/               SSR + browser Supabase clients only
+  bible/                  bible canon, parsing, providers/
+data/                     committed source data (raw JSON/CSV inputs)
+public/                   static assets served as-is (incl. generated data/)
+scripts/                  one-off Node/tsx scripts (build datasets, codegen)
+supabase/migrations/      timestamped SQL migrations + seed.sql
+tests/<mirror of lib|api> Vitest specs mirroring the source path
+```
+
+## Placement rules
+
+- **Server-only code** (uses `process.env`, service-role keys, `next/headers`) lives in `app/api/**` or `lib/**` files imported only by server. Never import these from `components/**`.
+- **Client components** must start with `"use client"` and live under `components/<domain>/` or colocated inside a route folder (e.g. `app/lounge/LoungeRoom.tsx`).
+- **Shared logic** goes in `lib/<domain>/`. If two features import it, promote it from a component file into `lib/`.
+- **One concern per file.** If a file passes ~400 lines or mixes UI + data fetching + parsing, split it (e.g. `BibleReader.tsx` UI vs `lib/bible/translations.ts` data).
+- **Tests mirror sources**: `lib/bible/parseRef.ts` → `tests/bible/parseRef.test.ts`. Every new module under `lib/` or `app/api/` ships with a test.
+- **Scripts are not runtime code.** Anything in `scripts/` must be invokable via an `npm` script in `package.json` and must not be imported by `app/` or `components/`.
+- **Generated artifacts** (cross-ref JSON, etc.) go in `public/data/` or `data/sources/` — never checked into `lib/`.
+
+## Naming
+
+- Components & React files: `PascalCase.tsx` (`BibleReader.tsx`).
+- Modules, hooks, utils: `camelCase.ts` (`parseRef.ts`, `useGridStore.ts`).
+- Route segments & API folders: lowercase, hyphenated (`app/api/bible/xrefs/`).
+- Tests: `<source>.test.ts(x)` mirroring the source path.
+- Migrations: rely on `npm run db:new <name>` — never hand-name timestamps.
+
+## Hygiene
+
+- Delete dead files in the same change that obsoletes them; do not leave `*.old.ts`, `*.bak`, or commented-out blocks.
+- No new top-level folders without updating this rule and the README "Project layout" section.
+- No secrets or `.env*` files committed (only `.env.example`).
+- Use the `@/` path alias for cross-folder imports; never use deep `../../../` chains.
+- Before finishing a change, run `npm run verify` (lint + typecheck + test).

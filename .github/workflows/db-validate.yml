@@ -1,0 +1,39 @@
+name: db-validate
+
+# Runs on every PR that touches a migration. Spins up a fresh local Supabase
+# stack via Docker, applies all migrations + seed.sql against it, and lints
+# the resulting schema. If this fails, the PR cannot break production
+# `db-deploy` either.
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+      - "supabase/config.toml"
+      - "supabase/seed.sql"
+      - ".github/workflows/db-validate.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # `supabase start` boots the local stack and applies every file in
+      # supabase/migrations/ followed by supabase/seed.sql. If anything in
+      # the schema is malformed it fails here.
+      - name: Start local Supabase stack (applies migrations)
+        run: supabase start
+
+      - name: Lint schema
+        run: supabase db lint
+
+      - name: Stop local Supabase stack
+        if: always()
+        run: supabase stop --no-backup
