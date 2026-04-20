@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Providers } from "@/components/chrome/Providers";
 import "./globals.css";
 
 const SITE_URL =
@@ -85,7 +86,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="h-full overflow-hidden antialiased">{children}</body>
+      <body className="h-full overflow-hidden antialiased">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

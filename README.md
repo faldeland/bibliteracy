@@ -32,8 +32,11 @@ npm run dev
 
 Open http://localhost:3000.
 
-The grid runs in **local mode** with a `localStorage`-backed dot store until you
-add Supabase env vars. No backend is required to develop the UI.
+The grid requires Supabase. Set `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` in `.env.local` (or run the local stack — see
+[Database workflow](#database-workflow-supabase-cli)) so every user's dots
+live behind their own account with RLS-enforced isolation. Without those
+vars the home page shows a sign-in prompt instead of the grid.
 
 ### Bible translations
 

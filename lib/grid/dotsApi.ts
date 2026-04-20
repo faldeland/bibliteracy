@@ -1,102 +1,94 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { isSupabaseConfigured } from "@/lib/supabase/env";
+import { useEffect, useMemo, useRef } from "react";
 import {
-  createDotLocal,
-  deleteDotLocal,
-  updateDotLocal,
-  useDotsLocal,
-} from "./dotsStore";
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from "@tanstack/react-query";
+import { createClient } from "@/lib/supabase/client";
 import type { Dot } from "./types";
 
-export type DotUpdate = Partial<Omit<Dot, "id" | "ownerId" | "createdAt" | "updatedAt">>;
+export type DotUpdate = Partial<
+  Omit<Dot, "id" | "ownerId" | "createdAt" | "updatedAt">
+>;
+
+export type NewDotInput = Omit<
+  Dot,
+  "id" | "ownerId" | "createdAt" | "updatedAt"
+>;
 
 export interface DotsApi {
   dots: Dot[];
   isLoading: boolean;
-  /** True when the app is running against Supabase + a signed-in user. */
+  /** Always true now that the grid is gated behind sign-in — kept for UI code. */
   isCloud: boolean;
-  userId: string | null;
-  createDot(
-    partial: Omit<Dot, "id" | "ownerId" | "createdAt" | "updatedAt">,
-  ): Promise<void>;
+  userId: string;
+  createDot(partial: NewDotInput): Promise<void>;
   updateDot(id: string, patch: DotUpdate): Promise<void>;
   deleteDot(id: string): Promise<void>;
 }
 
+export function dotsQueryKey(userId: string): QueryKey {
+  return ["dots", userId];
+}
+
 /**
- * Unified data hook. Uses Supabase when configured AND the user is signed in,
- * otherwise falls back to the localStorage store so the app remains fully
- * usable in dev without a backend.
+ * Fetches + subscribes to the current user's dots. Strictly scoped to
+ * `owner_id = userId` at the query layer (RLS is a belt-and-suspenders);
+ * realtime payloads are filtered server-side by the same predicate.
+ *
+ * Mutations are optimistic: the cache is patched immediately and rolled back
+ * on error, then reconciled when the realtime INSERT/UPDATE/DELETE echoes
+ * back from Postgres.
  */
-export function useDots(): DotsApi {
-  const localDots = useDotsLocal();
-  const [userId, setUserId] = useState<string | null>(null);
-  const [cloudDots, setCloudDots] = useState<Dot[] | null>(null);
-  const [loadingCloud, setLoadingCloud] = useState(false);
-  const supabaseConfigured = isSupabaseConfigured();
+export function useDots(userId: string): DotsApi {
+  const queryClient = useQueryClient();
   const supabaseRef = useRef<ReturnType<typeof createClient> | null>(null);
+  if (!supabaseRef.current) supabaseRef.current = createClient();
+  const supabase = supabaseRef.current;
 
-  // Watch auth state.
-  useEffect(() => {
-    if (!supabaseConfigured) return;
-    const supabase = supabaseRef.current ?? createClient();
-    supabaseRef.current = supabase;
+  const queryKey = useMemo(() => dotsQueryKey(userId), [userId]);
 
-    let mounted = true;
-    supabase.auth.getUser().then(({ data }) => {
-      if (mounted) setUserId(data.user?.id ?? null);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUserId(session?.user?.id ?? null);
-    });
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, [supabaseConfigured]);
-
-  // Fetch + subscribe to dots when in cloud mode.
-  useEffect(() => {
-    if (!supabaseConfigured || !userId) {
-      setCloudDots(null);
-      return;
-    }
-    const supabase = supabaseRef.current!;
-    let mounted = true;
-    setLoadingCloud(true);
-
-    (async () => {
+  const { data, isLoading } = useQuery<Dot[]>({
+    queryKey,
+    enabled: !!userId,
+    queryFn: async () => {
       const { data, error } = await supabase
         .from("dots")
         .select("*")
+        .eq("owner_id", userId)
         .order("occurred_on", { ascending: true });
-      if (!mounted) return;
-      if (error) {
-        console.error("[dots] fetch error", error);
-        setCloudDots([]);
-      } else {
-        setCloudDots((data ?? []).map(rowToDot));
-      }
-      setLoadingCloud(false);
-    })();
+      if (error) throw error;
+      return (data ?? []).map(rowToDot);
+    },
+  });
 
+  // Realtime: apply server echoes into the cached list.
+  useEffect(() => {
+    if (!userId) return;
     const channel = supabase
       .channel(`dots-${userId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "dots" },
+        {
+          event: "*",
+          schema: "public",
+          table: "dots",
+          filter: `owner_id=eq.${userId}`,
+        },
         (payload) => {
-          setCloudDots((prev) => {
+          queryClient.setQueryData<Dot[]>(queryKey, (prev) => {
             if (!prev) return prev;
             if (payload.eventType === "INSERT") {
-              return [...prev, rowToDot(payload.new)];
+              const next = rowToDot(payload.new);
+              if (prev.some((d) => d.id === next.id)) return prev;
+              return [...prev, next];
             }
             if (payload.eventType === "UPDATE") {
-              const updated = rowToDot(payload.new);
-              return prev.map((d) => (d.id === updated.id ? updated : d));
+              const next = rowToDot(payload.new);
+              return prev.map((d) => (d.id === next.id ? next : d));
             }
             if (payload.eventType === "DELETE") {
               const id = (payload.old as { id?: string }).id;
@@ -109,44 +101,62 @@ export function useDots(): DotsApi {
       .subscribe();
 
     return () => {
-      mounted = false;
       supabase.removeChannel(channel);
     };
-  }, [supabaseConfigured, userId]);
+  }, [supabase, queryClient, userId, queryKey]);
 
-  const isCloud = supabaseConfigured && !!userId;
-
-  return {
-    dots: isCloud ? cloudDots ?? [] : localDots,
-    isLoading: isCloud ? loadingCloud : false,
-    isCloud,
-    userId,
-    async createDot(partial) {
-      if (!isCloud) {
-        createDotLocal(partial);
-        return;
-      }
-      const supabase = supabaseRef.current!;
-      const { error } = await supabase.from("dots").insert({
-        owner_id: userId,
-        kind: partial.kind,
-        occurred_on: partial.occurredOn,
-        title: partial.title ?? null,
-        body_md: partial.bodyMd ?? null,
-        refs: partial.refs ?? [],
-        logos_tag: partial.logosTag ?? null,
-        visibility: partial.visibility,
-        livekit_room_name: partial.livekitRoomName ?? null,
-        scheduled_for: partial.scheduledFor ?? null,
-      });
-      if (error) console.error("[dots] insert error", error);
+  const createMut = useMutation({
+    mutationFn: async (partial: NewDotInput) => {
+      const { data, error } = await supabase
+        .from("dots")
+        .insert({
+          owner_id: userId,
+          kind: partial.kind,
+          occurred_on: partial.occurredOn,
+          title: partial.title ?? null,
+          body_md: partial.bodyMd ?? null,
+          refs: partial.refs ?? [],
+          logos_tag: partial.logosTag ?? null,
+          visibility: partial.visibility,
+          livekit_room_name: partial.livekitRoomName ?? null,
+          scheduled_for: partial.scheduledFor ?? null,
+        })
+        .select("*")
+        .single();
+      if (error) throw error;
+      return rowToDot(data);
     },
-    async updateDot(id, patch) {
-      if (!isCloud) {
-        updateDotLocal(id, patch);
-        return;
-      }
-      const supabase = supabaseRef.current!;
+    onMutate: async (partial) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<Dot[]>(queryKey) ?? [];
+      const now = new Date().toISOString();
+      const optimistic: Dot = {
+        ...partial,
+        id: `optimistic-${now}-${Math.random().toString(36).slice(2, 8)}`,
+        ownerId: userId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      queryClient.setQueryData<Dot[]>(queryKey, [...previous, optimistic]);
+      return { previous, optimisticId: optimistic.id };
+    },
+    onError: (_err, _partial, ctx) => {
+      if (ctx) queryClient.setQueryData(queryKey, ctx.previous);
+    },
+    onSuccess: (saved, _partial, ctx) => {
+      queryClient.setQueryData<Dot[]>(queryKey, (prev) => {
+        const list = prev ?? [];
+        const withoutOpt = ctx
+          ? list.filter((d) => d.id !== ctx.optimisticId)
+          : list;
+        if (withoutOpt.some((d) => d.id === saved.id)) return withoutOpt;
+        return [...withoutOpt, saved];
+      });
+    },
+  });
+
+  const updateMut = useMutation({
+    mutationFn: async ({ id, patch }: { id: string; patch: DotUpdate }) => {
       const row: Record<string, unknown> = {};
       if (patch.kind !== undefined) row.kind = patch.kind;
       if (patch.occurredOn !== undefined) row.occurred_on = patch.occurredOn;
@@ -159,17 +169,65 @@ export function useDots(): DotsApi {
         row.livekit_room_name = patch.livekitRoomName ?? null;
       if (patch.scheduledFor !== undefined)
         row.scheduled_for = patch.scheduledFor ?? null;
-      const { error } = await supabase.from("dots").update(row).eq("id", id);
-      if (error) console.error("[dots] update error", error);
+      const { error } = await supabase
+        .from("dots")
+        .update(row)
+        .eq("id", id)
+        .eq("owner_id", userId);
+      if (error) throw error;
+    },
+    onMutate: async ({ id, patch }) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<Dot[]>(queryKey) ?? [];
+      queryClient.setQueryData<Dot[]>(queryKey, (prev) =>
+        (prev ?? []).map((d) =>
+          d.id === id
+            ? { ...d, ...patch, updatedAt: new Date().toISOString() }
+            : d,
+        ),
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, ctx) => {
+      if (ctx) queryClient.setQueryData(queryKey, ctx.previous);
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("dots")
+        .delete()
+        .eq("id", id)
+        .eq("owner_id", userId);
+      if (error) throw error;
+    },
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<Dot[]>(queryKey) ?? [];
+      queryClient.setQueryData<Dot[]>(queryKey, (prev) =>
+        (prev ?? []).filter((d) => d.id !== id),
+      );
+      return { previous };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx) queryClient.setQueryData(queryKey, ctx.previous);
+    },
+  });
+
+  return {
+    dots: data ?? [],
+    isLoading,
+    isCloud: true,
+    userId,
+    async createDot(partial) {
+      await createMut.mutateAsync(partial);
+    },
+    async updateDot(id, patch) {
+      await updateMut.mutateAsync({ id, patch });
     },
     async deleteDot(id) {
-      if (!isCloud) {
-        deleteDotLocal(id);
-        return;
-      }
-      const supabase = supabaseRef.current!;
-      const { error } = await supabase.from("dots").delete().eq("id", id);
-      if (error) console.error("[dots] delete error", error);
+      await deleteMut.mutateAsync(id);
     },
   };
 }
@@ -190,7 +248,7 @@ interface DotRow {
   updated_at: string;
 }
 
-function rowToDot(row: unknown): Dot {
+export function rowToDot(row: unknown): Dot {
   const r = row as DotRow;
   return {
     id: r.id,

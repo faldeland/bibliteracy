@@ -12,8 +12,7 @@ import { ConnectorOverlay } from "./ConnectorOverlay";
 import { useGridStore } from "@/lib/grid/state";
 import { zoomLevelFor, ZOOM_PX_PER_DAY, type ZoomLevel } from "@/lib/grid/time";
 import type { Dot, DotKind } from "@/lib/grid/types";
-import type { DotUpdate } from "@/lib/grid/dotsApi";
-import { isSupabaseConfigured } from "@/lib/supabase/env";
+import type { DotUpdate, NewDotInput } from "@/lib/grid/dotsApi";
 
 const ACCENT: Record<DotKind, string> = {
   logos: "var(--color-logos)",
@@ -29,15 +28,16 @@ const LANE_TITLE: Record<DotKind, string> = {
 
 interface GridCanvasProps {
   dots: Dot[];
-  isCloud?: boolean;
-  onCreateDot(d: Omit<Dot, "id" | "ownerId" | "createdAt" | "updatedAt">): void;
+  /** Display label for the current user (name or email). */
+  displayName?: string | null;
+  onCreateDot(d: NewDotInput): void;
   onUpdateDot?(id: string, patch: DotUpdate): void;
   onDeleteDot?(id: string): void;
 }
 
 export function GridCanvas({
   dots,
-  isCloud = false,
+  displayName,
   onCreateDot,
   onUpdateDot,
   onDeleteDot,
@@ -194,13 +194,39 @@ export function GridCanvas({
     return dots.filter((d) => d.refs.some((r) => r.book === selectedBookId));
   }, [dots, selectedBookId]);
 
+  const handleOpenDot = useCallback((d: Dot) => setActiveDotId(d.id), []);
+  const handleCloseSheet = useCallback(() => setActiveDotId(null), []);
+  const handleDeleteDot = useMemo(() => {
+    if (!onDeleteDot) return undefined;
+    return (id: string) => {
+      onDeleteDot(id);
+      setActiveDotId(null);
+    };
+  }, [onDeleteDot]);
+  const addLogos = useCallback(
+    (date: Date) => setComposer({ kind: "logos", date }),
+    [],
+  );
+  const addPrayer = useCallback(
+    (date: Date) => setComposer({ kind: "prayer", date }),
+    [],
+  );
+  const addDiscipleship = useCallback(
+    (date: Date) => setComposer({ kind: "discipleship", date }),
+    [],
+  );
+  const laneAddHandlers: Record<DotKind, (date: Date) => void> = useMemo(
+    () => ({ logos: addLogos, prayer: addPrayer, discipleship: addDiscipleship }),
+    [addLogos, addPrayer, addDiscipleship],
+  );
+
   return (
     <div className="flex h-full flex-col bg-[var(--color-paper)]">
       <Toolbar
         zoom={currentZoom}
         onZoom={setZoom}
         onToday={recenterOnToday}
-        isCloud={isCloud}
+        displayName={displayName}
         showAllConnectors={showAllConnectors}
         onToggleConnectors={() => setShowAllConnectors((v) => !v)}
       />
@@ -242,8 +268,8 @@ export function GridCanvas({
               accent={ACCENT[kind]}
               viewportWidth={viewportWidth}
               dots={filteredDots}
-              onAdd={(date) => setComposer({ kind, date })}
-              onOpenDot={(d) => setActiveDotId(d.id)}
+              onAdd={laneAddHandlers[kind]}
+              onOpenDot={handleOpenDot}
               onHoverDot={setHoverDotId}
             />
           ))}
@@ -263,16 +289,9 @@ export function GridCanvas({
 
       <DotSheet
         dot={activeDot}
-        onClose={() => setActiveDotId(null)}
+        onClose={handleCloseSheet}
         onUpdate={onUpdateDot}
-        onDelete={
-          onDeleteDot
-            ? (id) => {
-                onDeleteDot(id);
-                setActiveDotId(null);
-              }
-            : undefined
-        }
+        onDelete={handleDeleteDot}
       />
       {composer && (
         <NewDotComposer
@@ -291,19 +310,18 @@ function Toolbar({
   zoom,
   onZoom,
   onToday,
-  isCloud,
+  displayName,
   showAllConnectors,
   onToggleConnectors,
 }: {
   zoom: ZoomLevel;
   onZoom(z: ZoomLevel): void;
   onToday(): void;
-  isCloud: boolean;
+  displayName?: string | null;
   showAllConnectors: boolean;
   onToggleConnectors(): void;
 }) {
   const levels: ZoomLevel[] = ["day", "week", "month", "quarter", "year"];
-  const supabaseConfigured = isSupabaseConfigured();
   return (
     <header className="flex items-center justify-between border-b border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-2">
       <div className="flex items-center gap-3">
@@ -369,49 +387,35 @@ function Toolbar({
 
         <div className="mx-2 h-5 w-px bg-[var(--color-rule)]" />
 
-        {supabaseConfigured && (
-          <Link
-            href="/lounge"
-            className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
-          >
-            Lounge
-          </Link>
-        )}
-        {supabaseConfigured && isCloud && (
-          <Link
-            href="/settings"
-            className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
-          >
-            Guests
-          </Link>
-        )}
+        <Link
+          href="/lounge"
+          className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
+        >
+          Lounge
+        </Link>
+        <Link
+          href="/settings"
+          className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
+        >
+          Guests
+        </Link>
 
-        {supabaseConfigured ? (
-          isCloud ? (
-            <form action="/auth/signout" method="post">
-              <button
-                type="submit"
-                className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
-              >
-                Sign out
-              </button>
-            </form>
-          ) : (
-            <Link
-              href="/login"
-              className="rounded-md bg-[var(--color-ink)] px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-paper)]"
-            >
-              Sign in
-            </Link>
-          )
-        ) : (
+        {displayName && (
           <span
-            className="rounded-md bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-amber-900"
-            title="Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local"
+            className="ml-2 max-w-[14ch] truncate rounded-md bg-black/5 px-2 py-1 text-[11px] font-medium text-[var(--color-ink-2)]"
+            title={displayName}
           >
-            Local
+            {displayName}
           </span>
         )}
+        <form action="/auth/signout" method="post">
+          <button
+            type="submit"
+            className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
+          >
+            Sign out
+          </button>
+        </form>
       </div>
     </header>
   );

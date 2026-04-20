@@ -1,10 +1,11 @@
 "use client";
 
+import { memo, useCallback, useMemo } from "react";
 import { useGridStore } from "@/lib/grid/state";
-import { addDays, diffDays, isSameDay, today, toISO } from "@/lib/grid/time";
+import { addDays, diffDays, isSameDay, toISO } from "@/lib/grid/time";
+import { useNow } from "@/lib/grid/useNow";
 import { cn } from "@/lib/utils";
 import type { Dot, DotKind } from "@/lib/grid/types";
-import { useEffect, useMemo, useState } from "react";
 
 interface LaneProps {
   kind: DotKind;
@@ -32,12 +33,7 @@ export function Lane({
   const pxPerDay = useGridStore((s) => s.pxPerDay);
   const centerDate = useGridStore((s) => s.centerDate);
 
-  // Re-render at midnight so the "today" highlight stays current.
-  const [now, setNow] = useState(() => today());
-  useEffect(() => {
-    const id = setInterval(() => setNow(today()), 60_000);
-    return () => clearInterval(id);
-  }, []);
+  const now = useNow();
 
   // Bucket dots by day for cluster rendering.
   const dotsByDay = useMemo(() => {
@@ -51,20 +47,26 @@ export function Lane({
     return m;
   }, [dots, kind]);
 
+  const days = useMemo(() => {
+    if (viewportWidth <= 0) return [];
+    const halfPx = viewportWidth / 2;
+    const halfDays = Math.ceil(halfPx / pxPerDay) + 2;
+    const firstDay = addDays(centerDate, -halfDays);
+    const totalDays = halfDays * 2 + 1;
+    const out: { date: Date; left: number; iso: string }[] = [];
+    for (let i = 0; i < totalDays; i++) {
+      const d = addDays(firstDay, i);
+      const left = diffDays(d, centerDate) * pxPerDay + halfPx;
+      out.push({ date: d, left, iso: toISO(d) });
+    }
+    return out;
+  }, [viewportWidth, pxPerDay, centerDate]);
+
+  const handleAddToday = useCallback(() => onAdd(now), [onAdd, now]);
+
   if (viewportWidth <= 0) return null;
 
   const halfPx = viewportWidth / 2;
-  const halfDays = Math.ceil(halfPx / pxPerDay) + 2;
-  const firstDay = addDays(centerDate, -halfDays);
-  const totalDays = halfDays * 2 + 1;
-
-  const days: { date: Date; left: number; iso: string }[] = [];
-  for (let i = 0; i < totalDays; i++) {
-    const d = addDays(firstDay, i);
-    const left = diffDays(d, centerDate) * pxPerDay + halfPx;
-    days.push({ date: d, left, iso: toISO(d) });
-  }
-
   const todayLeft = diffDays(now, centerDate) * pxPerDay + halfPx;
 
   return (
@@ -84,7 +86,7 @@ export function Lane({
       {/* + button: adds a dot anchored to today */}
       <button
         type="button"
-        onClick={() => onAdd(now)}
+        onClick={handleAddToday}
         className="absolute right-3 top-2 z-10 flex h-7 items-center gap-1.5 rounded-full border border-[var(--color-rule)] bg-[var(--color-paper)] px-3 text-[11px] font-semibold text-[var(--color-ink-2)] shadow-sm hover:bg-white"
         title={`Add ${title} dot for today`}
       >
@@ -143,22 +145,35 @@ export function Lane({
   );
 }
 
-function DotCluster({
-  list,
-  left,
-  accent,
-  onOpenDot,
-  onHoverDot,
-}: {
+interface DotClusterProps {
   list: Dot[];
   left: number;
   accent: string;
   onOpenDot(d: Dot): void;
   onHoverDot?: (dotId: string | null) => void;
-}) {
+}
+
+const DotCluster = memo(function DotCluster({
+  list,
+  left,
+  accent,
+  onOpenDot,
+  onHoverDot,
+}: DotClusterProps) {
   const count = list.length;
-  // Hover surfaces the first dot in the cluster (matches the click behavior).
   const primary = list[0];
+  const handleClick = useCallback(
+    () => onOpenDot(primary),
+    [onOpenDot, primary],
+  );
+  const handleEnter = useCallback(
+    () => onHoverDot?.(primary.id),
+    [onHoverDot, primary.id],
+  );
+  const handleLeave = useCallback(
+    () => onHoverDot?.(null),
+    [onHoverDot],
+  );
   return (
     <div
       className="absolute -translate-x-1/2"
@@ -166,9 +181,9 @@ function DotCluster({
     >
       <button
         type="button"
-        onClick={() => onOpenDot(primary)}
-        onMouseEnter={() => onHoverDot?.(primary.id)}
-        onMouseLeave={() => onHoverDot?.(null)}
+        onClick={handleClick}
+        onMouseEnter={handleEnter}
+        onMouseLeave={handleLeave}
         data-dot-id={primary.id}
         className="relative flex h-[1.17rem] w-[1.17rem] items-center justify-center rounded-full text-[9px] font-bold text-white shadow-md ring-2 ring-[var(--color-paper)] transition-transform hover:scale-110"
         style={{ background: accent }}
@@ -178,4 +193,4 @@ function DotCluster({
       </button>
     </div>
   );
-}
+});

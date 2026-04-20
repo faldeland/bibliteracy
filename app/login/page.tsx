@@ -1,11 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
+  const searchParams = useSearchParams();
+  const nextParam = searchParams.get("next") || "/";
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<
     "idle" | "sending" | "sent" | "error" | "unconfigured"
@@ -23,9 +34,11 @@ export default function LoginPage() {
     const supabase = createClient();
     const origin =
       typeof window !== "undefined" ? window.location.origin : "";
+    const callback = new URL(`${origin}/auth/callback`);
+    callback.searchParams.set("next", nextParam);
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${origin}/auth/callback` },
+      options: { emailRedirectTo: callback.toString() },
     });
     if (error) {
       setErrorMsg(error.message);
@@ -47,16 +60,11 @@ export default function LoginPage() {
 
         {status === "unconfigured" ? (
           <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-            Supabase isn&apos;t configured yet. The app runs in offline (local) mode —
-            head back to the{" "}
-            <Link className="underline" href="/">
-              grid
-            </Link>{" "}
-            to start journaling. Add{" "}
+            Supabase isn&apos;t configured yet. Add{" "}
             <code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code> and{" "}
             <code className="font-mono">NEXT_PUBLIC_SUPABASE_ANON_KEY</code> to{" "}
-            <code className="font-mono">.env.local</code> to enable accounts and
-            sync.
+            <code className="font-mono">.env.local</code> to enable accounts,
+            then reload.
           </div>
         ) : (
           <form onSubmit={onSubmit} className="mt-6 space-y-3">
@@ -86,6 +94,19 @@ export default function LoginPage() {
             )}
           </form>
         )}
+
+        {nextParam && nextParam !== "/" && (
+          <p className="mt-4 text-xs text-[var(--color-ink-2)]">
+            After sign-in you&apos;ll return to{" "}
+            <code className="font-mono">{nextParam}</code>.
+          </p>
+        )}
+
+        <p className="mt-4 text-xs text-[var(--color-ink-2)]">
+          <Link href="/" className="underline">
+            Back home
+          </Link>
+        </p>
       </div>
     </main>
   );

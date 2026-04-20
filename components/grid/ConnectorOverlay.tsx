@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useGridStore } from "@/lib/grid/state";
-import { BIBLE_BOOKS } from "@/lib/bible/books";
+import {
+  buildConnectorEdges,
+  refFraction,
+  type ConnectorEdge,
+} from "@/lib/grid/connectors";
 import type { BibleRef, Dot } from "@/lib/grid/types";
 
 interface ConnectorOverlayProps {
@@ -11,51 +15,8 @@ interface ConnectorOverlayProps {
   dots: Dot[];
   hoverDotId: string | null;
   hoverBookId: string | null;
-  /** Set externally (e.g. via a book click) — keeps connectors visible. */
   selectedBookId: string | null;
-  /** Persistently draw a connector for every (dot, ref) pair. */
   showAll?: boolean;
-}
-
-interface Edge {
-  key: string;
-  dotId: string;
-  bookId: string;
-  /** Strength in [0,1] driving stroke opacity / width — higher = more emphasis. */
-  weight: number;
-  /** Specific reference; lets the book-end anchor estimate where in the book to land. */
-  ref?: BibleRef;
-}
-
-const CHAPTERS_BY_BOOK: Map<string, number> = new Map(
-  BIBLE_BOOKS.map((b) => [b.id, b.chapters]),
-);
-
-/**
- * Estimate where inside a book bar a reference points to, returned as a
- * fraction in [0,1] (0 = book start, 1 = book end). We don't carry per-chapter
- * verse counts, so a chapter is treated as a uniform slice of the book and the
- * verse, when supplied, is positioned within that slice using a coarse
- * "verses per chapter" guess. This is intentionally rough — the book bar is
- * narrow and we just need the line to lean toward the right end of the book.
- */
-function refFraction(bookId: string, ref?: BibleRef): number {
-  if (!ref) return 0.5;
-  const chapters = CHAPTERS_BY_BOOK.get(bookId);
-  if (!chapters || chapters <= 0) return 0.5;
-  const chapter = Math.max(1, Math.min(chapters, ref.chapter || 1));
-  const VERSES_PER_CHAPTER_GUESS = 30;
-  let verseFrac = 0.5;
-  if (ref.verseStart && ref.verseStart > 0) {
-    const start = ref.verseStart;
-    const end = ref.verseEnd && ref.verseEnd >= start ? ref.verseEnd : start;
-    const mid = (start + end) / 2;
-    verseFrac = Math.max(
-      0,
-      Math.min(1, (mid - 0.5) / VERSES_PER_CHAPTER_GUESS),
-    );
-  }
-  return (chapter - 1 + verseFrac) / chapters;
 }
 
 interface Anchor {
@@ -65,12 +26,14 @@ interface Anchor {
 
 /**
  * Draws curved bezier connectors from dots up to the BooksLane book segments
- * they reference. We compute geometry from live DOM rects (querying
- * `[data-dot-id]` and `[data-book-id]`) so the overlay always tracks the
- * current pan/zoom without us having to rebuild a coordinate system.
+ * they reference.
  *
- * The overlay lives at the GridCanvas level and is purely decorative —
- * pointer-events: none — so hovering through it never blocks dot/book clicks.
+ * Performance notes:
+ * - Edge selection is a pure function in lib/grid/connectors.ts.
+ * - Each measurement tick collects every `[data-dot-id]` / `[data-book-id]`
+ *   element via TWO `querySelectorAll` calls (instead of one per edge),
+ *   builds Maps keyed by id, and looks up from there while building paths.
+ * - Pan / zoom / resize re-measures are coalesced into a single rAF frame.
  */
 export function ConnectorOverlay({
   containerRef,
@@ -80,100 +43,56 @@ export function ConnectorOverlay({
   selectedBookId,
   showAll = false,
 }: ConnectorOverlayProps) {
-  // We trigger a re-measure on a "tick" anytime layout could have changed.
-  // Pan/zoom from the store are obvious triggers; ResizeObserver covers
-  // window resizes; the hovered ids themselves trigger a recompute via deps.
   const pxPerDay = useGridStore((s) => s.pxPerDay);
   const centerDate = useGridStore((s) => s.centerDate);
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [tick, setTick] = useState(0);
+
+  // rAF-coalesced tick bumps. Multiple triggers inside the same frame (e.g.
+  // ResizeObserver + pan) collapse into one re-measure.
+  const rafRef = useRef<number | null>(null);
+  const bumpTick = useMemo(
+    () => () => {
+      if (rafRef.current !== null) return;
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        setTick((t) => t + 1);
+      });
+    },
+    [],
+  );
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
       setSize({ w: el.clientWidth, h: el.clientHeight });
-      setTick((t) => t + 1);
+      bumpTick();
     });
     ro.observe(el);
     setSize({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
-  }, [containerRef]);
+  }, [containerRef, bumpTick]);
 
   // Pan / zoom changes mean dot x positions move — re-measure.
   useEffect(() => {
-    setTick((t) => t + 1);
-  }, [pxPerDay, centerDate]);
+    bumpTick();
+  }, [pxPerDay, centerDate, bumpTick]);
 
-  // Which (dotId, bookId) pairs should we draw?
-  const edges = useMemo<Edge[]>(() => {
-    const list: Edge[] = [];
-    if (showAll) {
-      // Persistent: every (dot, ref) pair across the visible dot set.
-      for (const d of dots) {
-        const seenBooks = new Set<string>();
-        for (const r of d.refs) {
-          if (seenBooks.has(r.book)) continue;
-          seenBooks.add(r.book);
-          list.push({
-            key: `all:${d.id}->${r.book}`,
-            dotId: d.id,
-            bookId: r.book,
-            weight: 0.5,
-            ref: r,
-          });
-        }
-      }
-    }
-    if (selectedBookId) {
-      // Persistent: every visible dot referencing the selected book.
-      for (const d of dots) {
-        const ref = d.refs.find((r) => r.book === selectedBookId);
-        if (ref) {
-          list.push({
-            key: `${d.id}->${selectedBookId}`,
-            dotId: d.id,
-            bookId: selectedBookId,
-            weight: 0.85,
-            ref,
-          });
-        }
-      }
-    }
-    if (hoverDotId) {
-      const d = dots.find((x) => x.id === hoverDotId);
-      if (d) {
-        for (const r of d.refs) {
-          list.push({
-            key: `${d.id}->${r.book}`,
-            dotId: d.id,
-            bookId: r.book,
-            weight: 1,
-            ref: r,
-          });
-        }
-      }
-    }
-    if (hoverBookId) {
-      for (const d of dots) {
-        const ref = d.refs.find((r) => r.book === hoverBookId);
-        if (ref) {
-          list.push({
-            key: `${d.id}->${hoverBookId}`,
-            dotId: d.id,
-            bookId: hoverBookId,
-            weight: 0.9,
-            ref,
-          });
-        }
-      }
-    }
-    // Dedupe by key (hovers can overlap with selection / show-all).
-    const seen = new Set<string>();
-    return list.filter((e) =>
-      seen.has(e.key) ? false : (seen.add(e.key), true),
-    );
-  }, [dots, hoverDotId, hoverBookId, selectedBookId, showAll]);
+  const edges = useMemo<ConnectorEdge[]>(
+    () =>
+      buildConnectorEdges({
+        dots,
+        hoverDotId,
+        hoverBookId,
+        selectedBookId,
+        showAll,
+      }),
+    [dots, hoverDotId, hoverBookId, selectedBookId, showAll],
+  );
 
   const paths = useMemo(() => {
     if (edges.length === 0) return [];
@@ -181,10 +100,26 @@ export function ConnectorOverlay({
     if (!container) return [];
     const cRect = container.getBoundingClientRect();
 
+    // Build id -> element maps ONCE per measurement tick, then look up from
+    // there. This replaces N `querySelector` calls with 2 `querySelectorAll`
+    // calls, which is decisive when `showAll` is on.
+    const dotEls = new Map<string, HTMLElement>();
+    container
+      .querySelectorAll<HTMLElement>("[data-dot-id]")
+      .forEach((el) => {
+        const id = el.dataset.dotId;
+        if (id) dotEls.set(id, el);
+      });
+    const bookEls = new Map<string, HTMLElement>();
+    container
+      .querySelectorAll<HTMLElement>("[data-book-id]")
+      .forEach((el) => {
+        const id = el.dataset.bookId;
+        if (id) bookEls.set(id, el);
+      });
+
     const dotAnchor = (dotId: string): Anchor | null => {
-      const el = container.querySelector<HTMLElement>(
-        `[data-dot-id="${dotId}"]`,
-      );
+      const el = dotEls.get(dotId);
       if (!el) return null;
       const r = el.getBoundingClientRect();
       return {
@@ -193,20 +128,15 @@ export function ConnectorOverlay({
       };
     };
     const bookAnchor = (bookId: string, ref?: BibleRef): Anchor | null => {
-      const el = container.querySelector<HTMLElement>(
-        `[data-book-id="${bookId}"]`,
-      );
+      const el = bookEls.get(bookId);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      // Inset slightly so anchors near chapter 1 / final chapter don't sit
-      // exactly on the book divider (which would visually attribute them to
-      // the neighbor).
       const INSET_PX = 1.5;
       const usable = Math.max(0, r.width - INSET_PX * 2);
       const frac = refFraction(bookId, ref);
       return {
         x: r.left + INSET_PX + usable * frac - cRect.left,
-        y: r.bottom - cRect.top, // anchor at the bottom edge of the book bar
+        y: r.bottom - cRect.top,
       };
     };
 
@@ -214,8 +144,6 @@ export function ConnectorOverlay({
       const a = dotAnchor(e.dotId);
       const b = bookAnchor(e.bookId, e.ref);
       if (!a || !b) return [];
-      // Bezier with control points pulled vertically toward the midpoint, so
-      // the line eases out of the dot upward and into the book bar from below.
       const dy = a.y - b.y;
       const c1y = a.y - dy * 0.55;
       const c2y = b.y + dy * 0.55;
@@ -232,6 +160,9 @@ export function ConnectorOverlay({
         },
       ];
     });
+    // `size` and `tick` are read indirectly via DOM rects, so the linter
+    // can't see the dependency — keep them to force re-measurement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edges, containerRef, size, tick]);
 
   if (size.w === 0 || size.h === 0) return null;
@@ -246,9 +177,7 @@ export function ConnectorOverlay({
     >
       <defs>
         <linearGradient id="connector-gradient" x1="0" y1="0" x2="0" y2="1">
-          {/* Top (book end) — book-bar ink color, faint. */}
           <stop offset="0%" stopColor="var(--color-ink)" stopOpacity="0.85" />
-          {/* Bottom (dot end) — slightly stronger so the dot side reads. */}
           <stop offset="100%" stopColor="var(--color-ink)" stopOpacity="0.55" />
         </linearGradient>
       </defs>
@@ -262,7 +191,6 @@ export function ConnectorOverlay({
             strokeLinecap="round"
             opacity={0.35 + p.weight * 0.5}
           />
-          {/* Tiny ring at the book end so it visually "lands" on the bar. */}
           <circle cx={p.bx} cy={p.by} r={2.5} fill="var(--color-ink)" opacity={0.65} />
         </g>
       ))}

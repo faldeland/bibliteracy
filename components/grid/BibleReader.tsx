@@ -928,6 +928,9 @@ function VerseTimeIndicator({
   const [snap, setSnap] = useState<TrackerSnapshot>({
     current: null,
     totals: {},
+    isActive: false,
+    lastActivityAt: 0,
+    idleThresholdMs: 30_000,
   });
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement | null>(null);
@@ -970,8 +973,24 @@ function VerseTimeIndicator({
 
   const hasAny = Object.keys(snap.totals).length > 0 || liveMs > 0;
   const display = liveMs > 0 ? formatDuration(liveMs) : "0:00";
-  const isTicking =
-    snap.current?.verseKey === activeVerseKey && snap.current.activeMs > 0;
+  const sessionOnThisVerse = snap.current?.verseKey === activeVerseKey;
+  // Actively ticking right now: session on this verse + user is active.
+  const isTicking = sessionOnThisVerse && snap.isActive;
+  // Session on this verse, but the tracker has paused us on idle / hidden tab.
+  const isPaused =
+    sessionOnThisVerse && !snap.isActive && (snap.current?.activeMs ?? 0) > 0;
+
+  const idleSec = Math.max(
+    0,
+    Math.floor((Date.now() - snap.lastActivityAt) / 1000),
+  );
+  const title = !hasAny
+    ? "No study time recorded yet — click to track as you read"
+    : isTicking
+      ? "Study time on this verse — timer running. Click for history."
+      : isPaused
+        ? `Paused — no activity for ${idleSec}s. Move the mouse or press a key to resume. Click for history.`
+        : "Study time on this verse — click for history";
 
   return (
     <div className="relative shrink-0 self-stretch">
@@ -979,35 +998,57 @@ function VerseTimeIndicator({
         ref={btnRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title={
-          hasAny
-            ? "Study time on this verse — click for history"
-            : "No study time recorded yet — click to track as you read"
-        }
+        title={title}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-label={
+          isPaused
+            ? `Study time ${display}, paused`
+            : isTicking
+              ? `Study time ${display}, running`
+              : `Study time ${display}`
+        }
         className={cn(
           "flex h-full items-center gap-1 rounded-md border px-1.5 text-[11px] font-medium tabular-nums transition-colors",
           isTicking
             ? "border-emerald-600/50 bg-emerald-50/60 text-emerald-900"
-            : "border-[var(--color-rule)] bg-white text-[var(--color-ink-2)] hover:border-[var(--color-ink-2)]/50 hover:text-[var(--color-ink)]",
+            : isPaused
+              ? "border-amber-600/40 bg-amber-50/50 text-amber-900"
+              : "border-[var(--color-rule)] bg-white text-[var(--color-ink-2)] hover:border-[var(--color-ink-2)]/50 hover:text-[var(--color-ink)]",
         )}
       >
-        <svg
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          className={cn("h-3.5 w-3.5", isTicking && "animate-pulse")}
-          aria-hidden
-        >
-          <circle cx="10" cy="11" r="6" />
-          <path d="M10 7.5v3.5l2 1.5" />
-          <path d="M8 3h4" />
-        </svg>
+        {isPaused ? (
+          <svg
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3.5 w-3.5"
+            aria-hidden
+          >
+            <rect x="5.5" y="4.5" width="3" height="11" rx="0.75" />
+            <rect x="11.5" y="4.5" width="3" height="11" rx="0.75" />
+          </svg>
+        ) : (
+          <svg
+            viewBox="0 0 20 20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={cn("h-3.5 w-3.5", isTicking && "animate-pulse")}
+            aria-hidden
+          >
+            <circle cx="10" cy="11" r="6" />
+            <path d="M10 7.5v3.5l2 1.5" />
+            <path d="M8 3h4" />
+          </svg>
+        )}
         <span>{display}</span>
+        {isPaused && (
+          <span className="ml-0.5 text-[9px] font-semibold uppercase tracking-wider">
+            Paused
+          </span>
+        )}
       </button>
       {open && (
         <VerseTimePanel

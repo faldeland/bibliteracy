@@ -71,11 +71,26 @@ export interface TrackerSnapshot {
   current: CurrentSession | null;
   /** Rollup totals keyed by `VerseKey`. */
   totals: Record<VerseKey, VerseStats>;
+  /**
+   * True iff there's a live session AND the user is active right now
+   * (tab visible + activity event within IDLE_THRESHOLD_MS). When false
+   * with a non-null `current`, the timer is paused.
+   */
+  isActive: boolean;
+  /** Epoch ms of the last recorded user-activity event. */
+  lastActivityAt: number;
+  /** The idle-timeout cutoff the tracker uses, exposed for UI copy. */
+  idleThresholdMs: number;
 }
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-/** Milliseconds of inactivity after which a tick no longer counts. */
+/**
+ * Milliseconds of inactivity after which the timer pauses. 30s is a
+ * reasonable balance for reading: long enough that a slow re-read of
+ * a single verse without mouse movement doesn't pause you, short
+ * enough that actually walking away from the screen pauses quickly.
+ */
 const IDLE_THRESHOLD_MS = 30_000;
 /** Heartbeat interval; lower = finer resolution, higher = cheaper. */
 const TICK_MS = 1_000;
@@ -153,7 +168,13 @@ function savePersisted() {
 // ─── Notifications ─────────────────────────────────────────────────────────
 
 function snapshot(): TrackerSnapshot {
-  return { current: state.current, totals: state.totals };
+  return {
+    current: state.current,
+    totals: state.totals,
+    isActive: state.current ? isActiveNow() : false,
+    lastActivityAt: state.lastActivityAt,
+    idleThresholdMs: IDLE_THRESHOLD_MS,
+  };
 }
 
 function notify() {
@@ -176,14 +197,26 @@ function isActiveNow(): boolean {
 }
 
 function onActivity() {
+  // Detect idle → active transition so the UI can flip out of the
+  // paused state on the very next event, without waiting for the 1 Hz
+  // tick. We don't notify on every event (mousemove fires hundreds of
+  // times a second) — only when there's a live session and the flip
+  // actually happened.
+  const wasActive = state.current ? isActiveNow() : false;
   state.lastActivityAt = Date.now();
+  if (state.current && !wasActive) notify();
 }
 
 function tick() {
   const cur = state.current;
   if (!cur) return;
-  if (!isActiveNow()) return;
-  cur.activeMs += TICK_MS;
+  if (isActiveNow()) {
+    cur.activeMs += TICK_MS;
+  }
+  // Notify every tick while a session is live, even when paused, so
+  // subscribers can render "paused — idle for 12s" and so the
+  // active → idle edge triggers a re-render once the user stops
+  // moving for IDLE_THRESHOLD_MS.
   notify();
 }
 

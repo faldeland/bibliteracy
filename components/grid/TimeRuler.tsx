@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useGridStore } from "@/lib/grid/state";
 import {
   addDays,
@@ -7,10 +8,9 @@ import {
   formatTickLabel,
   isMajorTick,
   isSameDay,
-  today,
   zoomLevelFor,
 } from "@/lib/grid/time";
-import { useEffect, useState } from "react";
+import { useNow } from "@/lib/grid/useNow";
 
 interface TimeRulerProps {
   viewportWidth: number;
@@ -19,30 +19,27 @@ interface TimeRulerProps {
 export function TimeRuler({ viewportWidth }: TimeRulerProps) {
   const pxPerDay = useGridStore((s) => s.pxPerDay);
   const centerDate = useGridStore((s) => s.centerDate);
+  const now = useNow();
   const zoom = zoomLevelFor(pxPerDay);
 
-  // Re-render at midnight so the "today" marker stays current.
-  const [now, setNow] = useState(() => today());
-  useEffect(() => {
-    const tick = () => setNow(today());
-    const id = setInterval(tick, 60_000);
-    return () => clearInterval(id);
-  }, []);
+  const ticks = useMemo(() => {
+    if (viewportWidth <= 0) return [];
+    const halfPx = viewportWidth / 2;
+    const halfDays = Math.ceil(halfPx / pxPerDay) + 2;
+    const firstDay = addDays(centerDate, -halfDays);
+    const totalDays = halfDays * 2 + 1;
+    const out: { date: Date; left: number; major: boolean }[] = [];
+    for (let i = 0; i < totalDays; i++) {
+      const d = addDays(firstDay, i);
+      const left = diffDays(d, centerDate) * pxPerDay + halfPx;
+      out.push({ date: d, left, major: isMajorTick(d, zoom) });
+    }
+    return out;
+  }, [viewportWidth, pxPerDay, centerDate, zoom]);
 
   if (viewportWidth <= 0) return null;
 
   const halfPx = viewportWidth / 2;
-  const halfDays = Math.ceil(halfPx / pxPerDay) + 2;
-  const firstDay = addDays(centerDate, -halfDays);
-  const totalDays = halfDays * 2 + 1;
-
-  const ticks: { date: Date; left: number; major: boolean }[] = [];
-  for (let i = 0; i < totalDays; i++) {
-    const d = addDays(firstDay, i);
-    const left = (diffDays(d, centerDate)) * pxPerDay + halfPx;
-    ticks.push({ date: d, left, major: isMajorTick(d, zoom) });
-  }
-
   const todayLeft = diffDays(now, centerDate) * pxPerDay + halfPx;
 
   return (
