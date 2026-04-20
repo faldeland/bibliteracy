@@ -12,6 +12,13 @@ import type { BibleRef, Dot } from "@/lib/grid/types";
 interface ConnectorOverlayProps {
   /** The element whose top-left is the (0,0) of our SVG canvas. */
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Optional scroll container *inside* `containerRef` whose scroll events
+   * should trigger a re-measure. The lanes stack is scrollable when more
+   * timelines exist than fit on screen; scrolling moves dot screen positions
+   * without resizing anything, so we need a direct scroll hook.
+   */
+  scrollContainerRef?: React.RefObject<HTMLDivElement | null>;
   dots: Dot[];
   hoverDotId: string | null;
   hoverBookId: string | null;
@@ -37,6 +44,7 @@ interface Anchor {
  */
 export function ConnectorOverlay({
   containerRef,
+  scrollContainerRef,
   dots,
   hoverDotId,
   hoverBookId,
@@ -81,6 +89,17 @@ export function ConnectorOverlay({
   useEffect(() => {
     bumpTick();
   }, [pxPerDay, centerDate, bumpTick]);
+
+  // Scrolling the lanes stack moves dot y positions without changing any
+  // element size, so ResizeObserver doesn't fire. Listen for scroll on the
+  // lanes container directly.
+  useEffect(() => {
+    const el = scrollContainerRef?.current;
+    if (!el) return;
+    const onScroll = () => bumpTick();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [scrollContainerRef, bumpTick]);
 
   const edges = useMemo<ConnectorEdge[]>(
     () =>

@@ -8,7 +8,9 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { BIBLE_BOOKS } from "@/lib/bible/books";
+import { fetchChapterFromApi } from "@/lib/bible/chapterApiClient";
 import {
   DEFAULT_TRANSLATION_ID,
   getTranslation,
@@ -17,6 +19,7 @@ import {
   translationsFor,
 } from "@/lib/bible/translations";
 import { matchTrustedWork } from "@/lib/llm/trustedSources";
+import { useGridStore } from "@/lib/grid/state";
 import {
   endSession as endVerseSession,
   formatDuration,
@@ -30,6 +33,7 @@ import {
 import { BibleSearchBar, type BibleNavTarget } from "./BibleSearchBar";
 import { BibleVersionPicker } from "./BibleVersionPicker";
 import { WordDeepDiveDrawer } from "./WordDeepDiveDrawer";
+import { useBibleHeaderSlotTarget } from "./bibleHeaderSlot";
 import { cn } from "@/lib/utils";
 
 // ─── Types matching the /api/bible/* responses ────────────────────────────
@@ -43,19 +47,6 @@ interface ParsedVerse {
   tokens: VerseToken[];
   plain: string;
 }
-interface ChapterResponse {
-  book: string;
-  chapter: number;
-  /** Translation actually rendered (after server-side fallback). */
-  translation?: string;
-  /** Publisher attribution string (from the registry entry). */
-  attribution?: string | null;
-  verses: ParsedVerse[];
-  error?: string;
-  /** Name of an env var the operator must set to enable this translation. */
-  configMissing?: string;
-}
-
 interface ProvidersResponse {
   providers: Record<
     string,
@@ -317,11 +308,12 @@ export function BibleReader() {
     setChapterConfigMissing(null);
     setChapterAttribution(null);
     setChapterData(null);
-    fetch(
-      `/api/bible/chapter?book=${bookId}&chapter=${chapter}&translation=${encodeURIComponent(effectiveTranslation.id)}`,
-      { signal: ctl.signal },
+    fetchChapterFromApi(
+      bookId,
+      chapter,
+      effectiveTranslation.id,
+      ctl.signal,
     )
-      .then(async (r) => (await r.json()) as ChapterResponse)
       .then((data) => {
         if (aborted) return;
         if (data.error) {
@@ -329,10 +321,15 @@ export function BibleReader() {
           if (data.configMissing) setChapterConfigMissing(data.configMissing);
           return;
         }
-        setChapterData(data.verses);
+        const verses = data.verses;
+        if (!verses?.length) {
+          setChapterError("No verses returned for this chapter.");
+          return;
+        }
+        setChapterData(verses);
         setChapterAttribution(data.attribution ?? null);
         // Snap verse into range.
-        if (verse > data.verses.length) setVerse(data.verses.length || 1);
+        if (verse > verses.length) setVerse(verses.length || 1);
       })
       .catch((e) => {
         if (aborted) return;
@@ -399,6 +396,15 @@ export function BibleReader() {
     return () => endVerseSession();
   }, []);
 
+  // Publish the active verse into shared grid state so the new-dot composer
+  // can pre-populate a reference tag without having to thread props through
+  // the BooksLane / Lane / Toolbar trees.
+  const setCurrentBibleRef = useGridStore((s) => s.setCurrentBibleRef);
+  useEffect(() => {
+    setCurrentBibleRef({ book: bookId, chapter, verseStart: verse });
+    return () => setCurrentBibleRef(null);
+  }, [bookId, chapter, verse, setCurrentBibleRef]);
+
   // ← / → anywhere on the page moves between verses, unless focus is in a
   // text field (so typing in the search bar still moves the caret).
   useEffect(() => {
@@ -433,13 +439,9 @@ export function BibleReader() {
     }
     let aborted = false;
     const ctl = new AbortController();
-    fetch(
-      `/api/bible/chapter?book=${bookId}&chapter=${chapter}&translation=KJV`,
-      { signal: ctl.signal },
-    )
-      .then(async (r) => (await r.json()) as ChapterResponse)
+    fetchChapterFromApi(bookId, chapter, "KJV", ctl.signal)
       .then((data) => {
-        if (aborted || data.error) return;
+        if (aborted || data.error || !data.verses?.length) return;
         setKjvVerses(data.verses);
       })
       .catch(() => {
@@ -592,80 +594,85 @@ export function BibleReader() {
 
   // ─── Render ────────────────────────────────────────────────────────────
 
+  // The verse search + version picker render up in the global TopNav via a
+  // React portal (see `bibleHeaderSlot.tsx`). `headerSlot` is null on the
+  // very first render (the slot ref hasn't committed yet) but populates
+  // synchronously on mount, which is fine — the portal simply appears on
+  // the second paint.
+  const headerSlot = useBibleHeaderSlotTarget();
+  const headerControls = (
+    <>
+      <div className="flex min-w-0 flex-1 items-center">
+        <BibleSearchBar
+          current={{ bookId, chapter, verse }}
+          onNavigate={handleNavigate}
+          recents={recents}
+        />
+      </div>
+
+      <span className="hidden shrink-0 whitespace-nowrap text-[11px] text-[var(--color-ink-2)] lg:inline">
+        {book.name} {chapter}:{verse}
+        {effectiveTranslation.id !== preferredTranslation.id && (
+          <span className="ml-1 italic text-[var(--color-ink-2)]/70">
+            (fallback)
+          </span>
+        )}
+        {effectiveTranslation.license === "copyrighted" && (
+          <span
+            className="ml-1 italic text-amber-700/80"
+            title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
+          >
+            © unlicensed
+          </span>
+        )}
+        {effectiveTranslation.license === "licensed-via-publisher-api" && (
+          <span
+            className="ml-1 italic text-emerald-700/80"
+            title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
+          >
+            ⚐ via {effectiveTranslation.provider.toUpperCase()}
+          </span>
+        )}
+      </span>
+
+      {/* Translation picker — click or press ⌘D to open the searchable
+          modal. The button itself shows the active selection so users
+          always see what they're reading. */}
+      <button
+        type="button"
+        onClick={() => setPickerOpen(true)}
+        title={`${preferredTranslation.fullName} — search translations (⌘D)`}
+        aria-label={`Translation: ${preferredTranslation.label}. Open picker.`}
+        aria-haspopup="dialog"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-rule)] bg-white px-2 text-[11px] text-[var(--color-ink)] hover:border-[var(--color-ink-2)]/50"
+      >
+        <span className="font-mono uppercase tracking-wide">
+          {preferredTranslation.label}
+        </span>
+        {effectiveTranslation.id !== preferredTranslation.id && (
+          <span
+            className="text-[10px] italic text-[var(--color-ink-2)]/70"
+            title={`Falling back to ${effectiveTranslation.label} — ${preferredTranslation.label} doesn't cover ${book.testament}.`}
+          >
+            → {effectiveTranslation.label}
+          </span>
+        )}
+        <kbd className="hidden rounded border border-[var(--color-rule)] bg-[var(--color-paper)] px-1 py-px font-mono text-[9px] uppercase tracking-widest text-[var(--color-ink-2)] sm:inline">
+          ⌘D
+        </kbd>
+      </button>
+    </>
+  );
+
   return (
     <section
       className="border-b border-[var(--color-rule)] bg-[var(--color-paper)]"
       aria-label="Bible reading"
     >
-      <div className="flex items-center gap-3 px-4 py-2.5">
-        <span className="hidden font-serif text-sm font-semibold text-[var(--color-ink)] sm:inline">
-          Read
-        </span>
-        <div className="flex flex-1 items-center">
-          <BibleSearchBar
-            current={{ bookId, chapter, verse }}
-            onNavigate={handleNavigate}
-            recents={recents}
-          />
-        </div>
-
-        <span className="hidden whitespace-nowrap text-[11px] text-[var(--color-ink-2)] md:inline">
-          {book.name} {chapter}:{verse} · {effectiveTranslation.label}
-          {effectiveTranslation.hasStrongs && " / BDB-Thayer\u2019s"}
-          {effectiveTranslation.id !== preferredTranslation.id && (
-            <span className="ml-1 italic text-[var(--color-ink-2)]/70">
-              (fallback)
-            </span>
-          )}
-          {effectiveTranslation.license === "copyrighted" && (
-            <span
-              className="ml-1 italic text-amber-700/80"
-              title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
-            >
-              © unlicensed
-            </span>
-          )}
-          {effectiveTranslation.license === "licensed-via-publisher-api" && (
-            <span
-              className="ml-1 italic text-emerald-700/80"
-              title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
-            >
-              ⚐ via {effectiveTranslation.provider.toUpperCase()}
-            </span>
-          )}
-        </span>
-
-        {/* Translation picker — pinned to the far right, opposite the
-            selected-verse info. Click or press ⌘D to open the searchable
-            modal; the button itself shows the active selection so users
-            always see what they're reading. */}
-        <button
-          type="button"
-          onClick={() => setPickerOpen(true)}
-          title={`${preferredTranslation.fullName} — search translations (⌘D)`}
-          aria-label={`Translation: ${preferredTranslation.label}. Open picker.`}
-          aria-haspopup="dialog"
-          className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-[var(--color-rule)] bg-white px-2 py-1 text-[11px] text-[var(--color-ink)] hover:border-[var(--color-ink-2)]/50"
-        >
-          <span className="font-mono uppercase tracking-wide">
-            {preferredTranslation.label}
-          </span>
-          {effectiveTranslation.id !== preferredTranslation.id && (
-            <span
-              className="text-[10px] italic text-[var(--color-ink-2)]/70"
-              title={`Falling back to ${effectiveTranslation.label} — ${preferredTranslation.label} doesn't cover ${book.testament}.`}
-            >
-              → {effectiveTranslation.label}
-            </span>
-          )}
-          <kbd className="hidden rounded border border-[var(--color-rule)] bg-[var(--color-paper)] px-1 py-px font-mono text-[9px] uppercase tracking-widest text-[var(--color-ink-2)] sm:inline">
-            ⌘D
-          </kbd>
-        </button>
-      </div>
+      {headerSlot && createPortal(headerControls, headerSlot)}
 
       {/* Verse line */}
-      <div className="relative px-4 pb-3">
+      <div className="relative px-4 pt-2 pb-3">
         {chapterError && chapterConfigMissing && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <div className="font-semibold">
@@ -735,10 +742,6 @@ export function BibleReader() {
                 disabled={!nextTarget}
                 onClick={() => nextTarget && handleNavigate(nextTarget)}
               />
-              <VerseTimeIndicator
-                activeVerseKey={verseKey({ bookId, chapter, verse })}
-                onJump={(target) => handleNavigate(target)}
-              />
               <div className="min-w-0 flex-1">
                 {effectiveTranslation.hasStrongs ? (
                   <Interlinear
@@ -759,6 +762,10 @@ export function BibleReader() {
                   />
                 )}
               </div>
+              <VerseTimeIndicator
+                activeVerseKey={verseKey({ bookId, chapter, verse })}
+                onJump={(target) => handleNavigate(target)}
+              />
             </div>
           </>
         )}

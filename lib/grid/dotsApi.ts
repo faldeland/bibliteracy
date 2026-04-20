@@ -10,14 +10,21 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import type { Dot } from "./types";
 
+// `createdAt` is editable: users can retroactively set the "exact time" of
+// a dot (e.g. when backfilling). `updatedAt` is always server-managed by the
+// `dots_set_updated_at` trigger, so it stays out of the patch shape.
 export type DotUpdate = Partial<
-  Omit<Dot, "id" | "ownerId" | "createdAt" | "updatedAt">
+  Omit<Dot, "id" | "ownerId" | "updatedAt">
 >;
 
+// `createdAt` is optional on create: when the user wants the dot to represent
+// a moment other than "now" (e.g. they're logging this morning's devotion at
+// lunchtime), the composer sends the chosen time and we honor it. Omit to let
+// the DB default (`now()`) take over.
 export type NewDotInput = Omit<
   Dot,
   "id" | "ownerId" | "createdAt" | "updatedAt"
->;
+> & { createdAt?: string };
 
 export interface DotsApi {
   dots: Dot[];
@@ -112,14 +119,19 @@ export function useDots(userId: string): DotsApi {
         .insert({
           owner_id: userId,
           kind: partial.kind,
+          timeline_id: partial.timelineId ?? null,
           occurred_on: partial.occurredOn,
           title: partial.title ?? null,
           body_md: partial.bodyMd ?? null,
           refs: partial.refs ?? [],
+          tags: partial.tags ?? [],
           logos_tag: partial.logosTag ?? null,
           visibility: partial.visibility,
           livekit_room_name: partial.livekitRoomName ?? null,
           scheduled_for: partial.scheduledFor ?? null,
+          // Only send created_at when the caller overrode it; otherwise let
+          // the DB default to now().
+          ...(partial.createdAt ? { created_at: partial.createdAt } : {}),
         })
         .select("*")
         .single();
@@ -134,7 +146,7 @@ export function useDots(userId: string): DotsApi {
         ...partial,
         id: `optimistic-${now}-${Math.random().toString(36).slice(2, 8)}`,
         ownerId: userId,
-        createdAt: now,
+        createdAt: partial.createdAt ?? now,
         updatedAt: now,
       };
       queryClient.setQueryData<Dot[]>(queryKey, [...previous, optimistic]);
@@ -159,16 +171,20 @@ export function useDots(userId: string): DotsApi {
     mutationFn: async ({ id, patch }: { id: string; patch: DotUpdate }) => {
       const row: Record<string, unknown> = {};
       if (patch.kind !== undefined) row.kind = patch.kind;
+      if (patch.timelineId !== undefined)
+        row.timeline_id = patch.timelineId ?? null;
       if (patch.occurredOn !== undefined) row.occurred_on = patch.occurredOn;
       if (patch.title !== undefined) row.title = patch.title ?? null;
       if (patch.bodyMd !== undefined) row.body_md = patch.bodyMd ?? null;
       if (patch.refs !== undefined) row.refs = patch.refs;
+      if (patch.tags !== undefined) row.tags = patch.tags;
       if (patch.logosTag !== undefined) row.logos_tag = patch.logosTag ?? null;
       if (patch.visibility !== undefined) row.visibility = patch.visibility;
       if (patch.livekitRoomName !== undefined)
         row.livekit_room_name = patch.livekitRoomName ?? null;
       if (patch.scheduledFor !== undefined)
         row.scheduled_for = patch.scheduledFor ?? null;
+      if (patch.createdAt !== undefined) row.created_at = patch.createdAt;
       const { error } = await supabase
         .from("dots")
         .update(row)
@@ -236,10 +252,12 @@ interface DotRow {
   id: string;
   owner_id: string;
   kind: Dot["kind"];
+  timeline_id: string | null;
   occurred_on: string;
   title: string | null;
   body_md: string | null;
   refs: Dot["refs"] | null;
+  tags: string[] | null;
   logos_tag: Dot["logosTag"] | null;
   visibility: Dot["visibility"];
   livekit_room_name: string | null;
@@ -254,10 +272,12 @@ export function rowToDot(row: unknown): Dot {
     id: r.id,
     ownerId: r.owner_id,
     kind: r.kind,
+    timelineId: r.timeline_id ?? null,
     occurredOn: r.occurred_on,
     title: r.title ?? undefined,
     bodyMd: r.body_md ?? undefined,
     refs: r.refs ?? [],
+    tags: r.tags ?? [],
     logosTag: r.logos_tag ?? undefined,
     visibility: r.visibility,
     livekitRoomName: r.livekit_room_name ?? undefined,

@@ -23,6 +23,7 @@ export function GridShell({
 
   return (
     <GridCanvas
+      userId={userId}
       dots={dots}
       displayName={displayName ?? userEmail ?? null}
       onCreateDot={createDot}

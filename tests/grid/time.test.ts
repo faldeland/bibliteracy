@@ -7,6 +7,7 @@ import {
   isMajorTick,
   isSameDay,
   startOfDay,
+  timeOfDayFraction,
   toISO,
   today,
   zoomLevelFor,
@@ -171,6 +172,46 @@ describe("isMajorTick", () => {
   it("year zoom: only Jan 1 is major", () => {
     expect(isMajorTick(firstOfYear, "year")).toBe(true);
     expect(isMajorTick(firstOfQuarter, "year")).toBe(false);
+  });
+});
+
+describe("timeOfDayFraction", () => {
+  // Build ISO strings from a local Date so the test is independent of the
+  // runner's timezone — `timeOfDayFraction` reads local hours/minutes out.
+  function localIso(y: number, m: number, d: number, h: number, min = 0, s = 0): string {
+    return new Date(y, m, d, h, min, s).toISOString();
+  }
+
+  it("returns 0 at local midnight", () => {
+    expect(timeOfDayFraction(localIso(2026, 3, 20, 0, 0, 0))).toBe(0);
+  });
+
+  it("returns 0.5 at local noon", () => {
+    expect(timeOfDayFraction(localIso(2026, 3, 20, 12, 0, 0))).toBeCloseTo(0.5, 6);
+  });
+
+  it("returns ~0.25 at 6 AM and ~0.75 at 6 PM", () => {
+    expect(timeOfDayFraction(localIso(2026, 3, 20, 6, 0, 0))).toBeCloseTo(0.25, 6);
+    expect(timeOfDayFraction(localIso(2026, 3, 20, 18, 0, 0))).toBeCloseTo(0.75, 6);
+  });
+
+  it("stays strictly below 1.0 even at 23:59:59", () => {
+    const f = timeOfDayFraction(localIso(2026, 3, 20, 23, 59, 59));
+    expect(f).toBeGreaterThan(0.999);
+    expect(f).toBeLessThan(1);
+  });
+
+  it("is increasing within a single day", () => {
+    const a = timeOfDayFraction(localIso(2026, 3, 20, 3, 15, 0));
+    const b = timeOfDayFraction(localIso(2026, 3, 20, 3, 16, 0));
+    const c = timeOfDayFraction(localIso(2026, 3, 20, 9, 0, 0));
+    expect(b).toBeGreaterThan(a);
+    expect(c).toBeGreaterThan(b);
+  });
+
+  it("falls back to 0.5 for unparsable input so bad dots land near noon", () => {
+    expect(timeOfDayFraction("not-a-date")).toBe(0.5);
+    expect(timeOfDayFraction("")).toBe(0.5);
   });
 });
 

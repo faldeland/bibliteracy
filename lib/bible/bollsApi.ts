@@ -115,10 +115,16 @@ export function parseVerseTokens(
   if (tail) tokens.push({ text: tail, strong: null });
 
   // Build plain text by joining all chunks (including those without Strong's).
+  // Bolls' KJV keeps sentence punctuation OUTSIDE the Strong's tags
+  // (e.g. `tongue<S>03956</S> ,`), so once the tags are blanked out we end up
+  // with stray spaces before every comma/period/colon. Collapse those so the
+  // resulting sentence reads naturally ("tongue, against" not "tongue , against").
   const plain = cleaned
     .replace(STRONG_TAG_RE, " ")
     .replace(/<[^>]+>/g, "")
     .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?)\]])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
     .trim();
 
   return { tokens, plain };
@@ -132,6 +138,38 @@ interface BollsVerseRow {
   pk: number;
   verse: number;
   text: string;
+}
+
+const BOLLS_FETCH_INIT: RequestInit & { next?: { revalidate: number } } = {
+  next: { revalidate: 3600 },
+  headers: { accept: "application/json" },
+};
+
+/**
+ * Undici / Node often surfaces outbound TLS or DNS failures as a generic
+ * `TypeError` with message "fetch failed". Re-throw with context so the
+ * /api/bible/chapter route returns a diagnosable string instead of the
+ * opaque browser/Node default.
+ */
+async function fetchBollsChapterJson(url: string): Promise<Response> {
+  const tryOnce = () => fetch(url, BOLLS_FETCH_INIT);
+  try {
+    return await tryOnce();
+  } catch (first) {
+    const d1 = first instanceof Error ? first.message : String(first);
+    // One quick retry helps flaky Wi‑Fi / transient DNS in dev.
+    await new Promise((r) => setTimeout(r, 400));
+    try {
+      return await tryOnce();
+    } catch (second) {
+      const d2 = second instanceof Error ? second.message : String(second);
+      throw new Error(
+        `bolls.life unreachable (${d2}; first attempt: ${d1}). ` +
+          `The server could not complete HTTPS to ${BASE}. Check outbound internet, ` +
+          `VPN/firewall/proxy blocking that host, or try: curl "${BASE}/get-text/KJV/43/3/"`,
+      );
+    }
+  }
 }
 
 /**
@@ -156,17 +194,21 @@ export async function fetchChapter(
     : getTranslation(DEFAULT_TRANSLATION_ID);
 
   const url = `${BASE}/get-text/${translation.id}/${bolls}/${chapter}/`;
-  const res = await fetch(url, {
-    // Cache for an hour at the edge — Scripture text is immutable.
-    next: { revalidate: 3600 },
-    headers: { accept: "application/json" },
-  });
+  const res = await fetchBollsChapterJson(url);
   if (!res.ok) {
     throw new Error(
-      `bolls.life ${res.status} for ${translation.id} ${bookId} ${chapter}`,
+      `bolls.life HTTP ${res.status} for ${translation.id} ${bookId} ${chapter}`,
     );
   }
-  const rows = (await res.json()) as BollsVerseRow[];
+  let rows: BollsVerseRow[];
+  try {
+    rows = (await res.json()) as BollsVerseRow[];
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `bolls.life returned non-JSON for ${translation.id} ${bookId} ${chapter}: ${msg}`,
+    );
+  }
   return rows.map((r) => {
     const { tokens, plain } = parseVerseTokens(r.text, testament);
     return { verse: r.verse, tokens, plain };

@@ -446,7 +446,7 @@ export function BibleSearchBar({ current, onNavigate, recents }: Props) {
     <div ref={wrapRef} className="relative w-full max-w-[18.9rem]">
       <div
         className={cn(
-          "flex items-center gap-2 rounded-xl border bg-white px-3 py-1.5 transition-all",
+          "flex h-7 items-center gap-2 rounded-md border bg-white px-2.5 transition-all",
           open
             ? "border-[var(--color-ink)]/40 shadow-[0_2px_12px_-4px_rgba(31,27,22,0.25)]"
             : "border-[var(--color-rule)] hover:border-[var(--color-ink-2)]/40",

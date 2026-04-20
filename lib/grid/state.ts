@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { addDays, today, ZOOM_PX_PER_DAY, type ZoomLevel } from "./time";
+import type { BibleRef } from "./types";
 
 /**
  * Shared view state for the endless paper grid. All lanes consume this so they
@@ -14,6 +15,12 @@ export interface GridState {
   centerDate: Date;
   /** The book id selected in BooksLane (filters dot lanes), or null. */
   selectedBookId: string | null;
+  /**
+   * The verse currently focused in the BibleReader. Used by the new-dot
+   * composer to pre-populate a reference tag so users can one-click tag
+   * the dot with whatever passage they're reading.
+   */
+  currentBibleRef: BibleRef | null;
 
   setPxPerDay(px: number): void;
   setCenterDate(d: Date): void;
@@ -27,6 +34,7 @@ export interface GridState {
   setZoom(level: ZoomLevel): void;
   recenterOnToday(): void;
   setSelectedBookId(id: string | null): void;
+  setCurrentBibleRef(ref: BibleRef | null): void;
 }
 
 export const MIN_PX_PER_DAY = 0.6;
@@ -36,6 +44,7 @@ export const useGridStore = create<GridState>((set, get) => ({
   pxPerDay: ZOOM_PX_PER_DAY.week,
   centerDate: today(),
   selectedBookId: null,
+  currentBibleRef: null,
 
   setPxPerDay(px) {
     set({ pxPerDay: clamp(px, MIN_PX_PER_DAY, MAX_PX_PER_DAY) });
@@ -81,6 +90,10 @@ export const useGridStore = create<GridState>((set, get) => ({
 
   setSelectedBookId(id) {
     set({ selectedBookId: id });
+  },
+
+  setCurrentBibleRef(ref) {
+    set({ currentBibleRef: ref });
   },
 }));
 

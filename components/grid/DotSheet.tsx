@@ -5,17 +5,33 @@ import { cn } from "@/lib/utils";
 import type { Dot, DotVisibility, LogosTag } from "@/lib/grid/types";
 import type { DotUpdate } from "@/lib/grid/dotsApi";
 import { formatRef, parseRefs } from "@/lib/bible/parseRef";
+import { formatLocalTime, isoToLocalInput, localInputToISO } from "@/lib/grid/time";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { RoomEmbed } from "@/components/live/RoomEmbed";
+import { TagsInput } from "./TagsInput";
 
 interface DotSheetProps {
   dot: Dot | null;
+  /**
+   * All dots sharing the active dot's lane + day, newest first. When more
+   * than one is present the panel shows prev/next navigation so each can be
+   * viewed and edited.
+   */
+  siblings?: Dot[];
+  onSelectSibling?(id: string): void;
   onClose(): void;
   onUpdate?(id: string, patch: DotUpdate): void;
   onDelete?(id: string): void;
 }
 
-export function DotSheet({ dot, onClose, onUpdate, onDelete }: DotSheetProps) {
+export function DotSheet({
+  dot,
+  siblings,
+  onSelectSibling,
+  onClose,
+  onUpdate,
+  onDelete,
+}: DotSheetProps) {
   const open = !!dot;
   return (
     <>
@@ -38,6 +54,8 @@ export function DotSheet({ dot, onClose, onUpdate, onDelete }: DotSheetProps) {
             // Re-mount when the active dot changes so local edit state resets cleanly.
             key={dot.id}
             dot={dot}
+            siblings={siblings ?? [dot]}
+            onSelectSibling={onSelectSibling}
             onClose={onClose}
             onUpdate={onUpdate}
             onDelete={onDelete}
@@ -50,11 +68,15 @@ export function DotSheet({ dot, onClose, onUpdate, onDelete }: DotSheetProps) {
 
 function DotDetail({
   dot,
+  siblings,
+  onSelectSibling,
   onClose,
   onUpdate,
   onDelete,
 }: {
   dot: Dot;
+  siblings: Dot[];
+  onSelectSibling?(id: string): void;
   onClose(): void;
   onUpdate?(id: string, patch: DotUpdate): void;
   onDelete?(id: string): void;
@@ -63,8 +85,31 @@ function DotDetail({
   const canEdit = !!onUpdate;
   const canDelete = !!onDelete;
 
+  const index = siblings.findIndex((s) => s.id === dot.id);
+  const hasGroup = siblings.length > 1 && index >= 0 && !!onSelectSibling;
+  const goPrev = () => {
+    if (!hasGroup) return;
+    const prev = siblings[index - 1] ?? siblings[siblings.length - 1];
+    onSelectSibling!(prev.id);
+  };
+  const goNext = () => {
+    if (!hasGroup) return;
+    const next = siblings[index + 1] ?? siblings[0];
+    onSelectSibling!(next.id);
+  };
+
   return (
     <div className="flex h-full flex-col">
+      {hasGroup && (
+        <DaySiblingNav
+          siblings={siblings}
+          activeId={dot.id}
+          index={index}
+          onSelect={onSelectSibling!}
+          onPrev={goPrev}
+          onNext={goNext}
+        />
+      )}
       <header className="flex items-start justify-between border-b border-[var(--color-rule)] px-5 py-4">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
@@ -75,7 +120,7 @@ function DotDetail({
             {dot.title || "Untitled"}
           </h2>
           <div className="mt-0.5 text-xs text-[var(--color-ink-2)]">
-            {dot.occurredOn}
+            {dot.occurredOn} · {formatLocalTime(dot.createdAt)}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -127,6 +172,70 @@ function DotDetail({
   );
 }
 
+function DaySiblingNav({
+  siblings,
+  activeId,
+  index,
+  onSelect,
+  onPrev,
+  onNext,
+}: {
+  siblings: Dot[];
+  activeId: string;
+  index: number;
+  onSelect(id: string): void;
+  onPrev(): void;
+  onNext(): void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]/60 px-3 py-2">
+      <button
+        type="button"
+        onClick={onPrev}
+        aria-label="Previous dot on this day"
+        className="rounded-md px-2 py-1 text-sm text-[var(--color-ink-2)] hover:bg-black/5"
+      >
+        ←
+      </button>
+      <div className="flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto">
+        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+          {index + 1} / {siblings.length}
+        </span>
+        <div className="mx-2 h-4 w-px bg-[var(--color-rule)]" />
+        <div className="flex min-w-0 items-center gap-1">
+          {siblings.map((s, i) => {
+            const isActive = s.id === activeId;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onSelect(s.id)}
+                title={s.title || "(untitled)"}
+                className={cn(
+                  "max-w-[12ch] shrink-0 truncate rounded-full border px-2.5 py-0.5 text-[11px]",
+                  isActive
+                    ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-paper)]"
+                    : "border-[var(--color-rule)] text-[var(--color-ink-2)] hover:bg-black/5",
+                )}
+              >
+                {s.title?.trim() || `#${i + 1}`}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onNext}
+        aria-label="Next dot on this day"
+        className="rounded-md px-2 py-1 text-sm text-[var(--color-ink-2)] hover:bg-black/5"
+      >
+        →
+      </button>
+    </div>
+  );
+}
+
 function DotReadView({ dot }: { dot: Dot }) {
   return (
     <div className="flex-1 overflow-y-auto px-5 py-4 text-sm leading-relaxed text-[var(--color-ink)]">
@@ -145,6 +254,24 @@ function DotReadView({ dot }: { dot: Dot }) {
             {dot.refs.map((r, i) => (
               <li key={i} className="text-[var(--color-ink-2)]">
                 {formatRef(r)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {dot.tags.length > 0 && (
+        <div className="mt-6">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+            Tags
+          </div>
+          <ul className="flex flex-wrap gap-1.5 text-sm">
+            {dot.tags.map((t) => (
+              <li
+                key={t}
+                className="rounded-full border border-[var(--color-rule)] bg-[var(--color-paper-2)]/70 px-2 py-0.5 text-xs text-[var(--color-ink)]"
+              >
+                #{t}
               </li>
             ))}
           </ul>
@@ -194,9 +321,16 @@ function DotEditor({
   const [refsText, setRefsText] = useState(
     dot.refs.map((r) => formatRef(r)).join("; "),
   );
+  const [tags, setTags] = useState<string[]>(dot.tags ?? []);
   const [logosTag, setLogosTag] = useState<LogosTag>(dot.logosTag ?? "logos");
   const [visibility, setVisibility] = useState<DotVisibility>(dot.visibility);
   const [occurredOn, setOccurredOn] = useState(dot.occurredOn);
+  // `createdAt` is the exact moment the dot was born. We expose it as
+  // <input type="datetime-local"> which speaks local wall time, so the round
+  // trip here converts ISO(UTC) → local and back.
+  const [createdAtLocal, setCreatedAtLocal] = useState(() =>
+    isoToLocalInput(dot.createdAt),
+  );
 
   // If the underlying dot id changes, the parent re-mounts via key={dot.id}.
   // This effect just guards against weird in-place identity changes.
@@ -204,9 +338,11 @@ function DotEditor({
     setTitle(dot.title ?? "");
     setBody(dot.bodyMd ?? "");
     setRefsText(dot.refs.map((r) => formatRef(r)).join("; "));
+    setTags(dot.tags ?? []);
     setLogosTag(dot.logosTag ?? "logos");
     setVisibility(dot.visibility);
     setOccurredOn(dot.occurredOn);
+    setCreatedAtLocal(isoToLocalInput(dot.createdAt));
   }, [dot]);
 
   function handleSubmit(e: React.FormEvent) {
@@ -215,11 +351,19 @@ function DotEditor({
       title: title.trim() || undefined,
       bodyMd: body.trim() || undefined,
       refs: parseRefs(refsText),
+      tags,
       visibility,
       occurredOn,
     };
     if (dot.kind === "logos") {
       patch.logosTag = logosTag;
+    }
+    // Only include createdAt in the patch if the user actually changed it,
+    // so unrelated edits don't drift the server timestamp by ±1 minute due
+    // to datetime-local rounding to the minute.
+    const originalLocal = isoToLocalInput(dot.createdAt);
+    if (createdAtLocal && createdAtLocal !== originalLocal) {
+      patch.createdAt = localInputToISO(createdAtLocal);
     }
     onSave(patch);
   }
@@ -229,15 +373,30 @@ function DotEditor({
       onSubmit={handleSubmit}
       className="flex flex-1 flex-col overflow-y-auto px-5 py-4"
     >
-      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        Date
-      </label>
-      <input
-        type="date"
-        value={occurredOn}
-        onChange={(e) => setOccurredOn(e.target.value)}
-        className="mb-3 w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
-      />
+      <div className="mb-3 grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+            Date
+          </label>
+          <input
+            type="date"
+            value={occurredOn}
+            onChange={(e) => setOccurredOn(e.target.value)}
+            className="w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+            Time created
+          </label>
+          <input
+            type="datetime-local"
+            value={createdAtLocal}
+            onChange={(e) => setCreatedAtLocal(e.target.value)}
+            className="w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
+          />
+        </div>
+      </div>
 
       <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
         Title
@@ -269,6 +428,13 @@ function DotEditor({
         placeholder="John 3:16-17; Psa 23"
         className="mb-3 w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
       />
+
+      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+        Tags
+      </label>
+      <div className="mb-3">
+        <TagsInput tags={tags} onChange={setTags} />
+      </div>
 
       {dot.kind === "logos" && (
         <div className="mb-3">

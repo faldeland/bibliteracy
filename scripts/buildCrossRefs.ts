@@ -1,15 +1,23 @@
 /**
  * Offline build step that turns the OpenBible.info cross-references TSV
- * (CC BY 4.0, ~344k pairs) into a packed binary blob the canvas firehose
+ * (CC BY 4.0, ~344k pairs) into packed binary blobs the canvas firehose
  * can mmap-fast at runtime.
  *
  * Inputs (in priority order):
  *   1. data/sources/cross_references.txt   ← committed for reproducibility
  *   2. fresh download from openbible.info  ← if (1) is missing
  *
- * Outputs:
- *   public/data/xrefs.bin        — Uint32Array of pairs [fromIdx, toIdx, ...]
- *   public/data/xrefs.meta.json  — { count, votesMin, votesMax, builtAt, ... }
+ * Outputs two paired (bin, meta) artifacts:
+ *   public/data/xrefs.bin                 — the full firehose (Uint32Array
+ *                                           of [fromIdx, toIdx, ...])
+ *   public/data/xrefs.meta.json           — { count, votesMin, votesMax, … }
+ *   public/data/xrefs.recognized.bin      — the top-N-by-votes "recognized"
+ *                                           subset (Harrison/Römhild 2007
+ *                                           used 63,779 high-confidence
+ *                                           cross-references; we mirror
+ *                                           that cutoff). Served as the
+ *                                           default Atlas layer.
+ *   public/data/xrefs.recognized.meta.json
  *
  * Usage:
  *   npx tsx scripts/buildCrossRefs.ts                   # default: votes >= 0
@@ -35,6 +43,18 @@ const ROOT = resolve(__dirname, "..");
 const SOURCE_PATH = resolve(ROOT, "data/sources/cross_references.txt");
 const OUT_BIN = resolve(ROOT, "public/data/xrefs.bin");
 const OUT_META = resolve(ROOT, "public/data/xrefs.meta.json");
+const OUT_BIN_RECOGNIZED = resolve(ROOT, "public/data/xrefs.recognized.bin");
+const OUT_META_RECOGNIZED = resolve(
+  ROOT,
+  "public/data/xrefs.recognized.meta.json",
+);
+
+// The iconic Harrison/Römhild 2007 visualization was built on the 63,779
+// cross-references curated by Chris Harrison and Christoph Römhild. We
+// expose that same cutoff as our default "recognized" layer — it's the
+// high-confidence core most readers expect to see first. The remaining
+// arcs (up to ~343k) are opt-in.
+const RECOGNIZED_COUNT = 63_779;
 
 // OpenBible.info publishes the dataset as a gzipped TSV at this URL.
 // (As of 2026: served from `a.openbible.info`.)
@@ -292,17 +312,16 @@ function parseTSV(text: string): ParsedRow[] {
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
-async function main() {
-  const text = await loadSourceText();
-  const rows = parseTSV(text);
+interface PackResult {
+  bin: Buffer;
+  count: number;
+  votesMin: number | null;
+  votesMax: number | null;
+  votesThreshold: number | null;
+}
 
-  const filtered = rows.filter((r) => r.votes >= MIN_VOTES);
-  process.stdout.write(
-    `kept ${filtered.length.toLocaleString()} rows (votes >= ${MIN_VOTES})\n`,
-  );
-
-  // Sanity: every index must be in range.
-  for (const r of filtered) {
+function packRows(rows: ParsedRow[]): PackResult {
+  for (const r of rows) {
     if (r.fromIdx < 0 || r.fromIdx >= TOTAL_VERSES) {
       throw new Error(`fromIdx ${r.fromIdx} out of range`);
     }
@@ -314,28 +333,61 @@ async function main() {
   // Pack as Uint32Array of [from, to, from, to, ...]. We don't pack votes
   // — the renderer doesn't need them at draw time, and keeping the binary
   // small dominates. Vote stats live in the meta JSON.
-  const packed = new Uint32Array(filtered.length * 2);
-  for (let i = 0; i < filtered.length; i++) {
-    packed[i * 2] = filtered[i].fromIdx;
-    packed[i * 2 + 1] = filtered[i].toIdx;
+  const packed = new Uint32Array(rows.length * 2);
+  for (let i = 0; i < rows.length; i++) {
+    packed[i * 2] = rows[i].fromIdx;
+    packed[i * 2 + 1] = rows[i].toIdx;
   }
   const bin = Buffer.from(packed.buffer, packed.byteOffset, packed.byteLength);
 
-  const votesMin = filtered.reduce(
+  const votesMin = rows.reduce(
     (m, r) => Math.min(m, r.votes),
     Number.POSITIVE_INFINITY,
   );
-  const votesMax = filtered.reduce(
+  const votesMax = rows.reduce(
     (m, r) => Math.max(m, r.votes),
     Number.NEGATIVE_INFINITY,
   );
-  const sourceSha = createHash("sha256").update(text).digest("hex");
 
-  const meta = {
-    count: filtered.length,
-    minVotesFilter: MIN_VOTES,
+  return {
+    bin,
+    count: rows.length,
     votesMin: Number.isFinite(votesMin) ? votesMin : null,
     votesMax: Number.isFinite(votesMax) ? votesMax : null,
+    votesThreshold: null,
+  };
+}
+
+/**
+ * Pick the top-N rows by votes (descending). Ties are broken by keeping
+ * the original parse order so the binary is deterministic across runs
+ * for a fixed input TSV. Returns the chosen rows re-sorted back into
+ * their original order so the on-disk layout roughly tracks canonical
+ * book order, which gives the renderer better cache behaviour.
+ */
+function topByVotes(rows: ParsedRow[], n: number): ParsedRow[] {
+  if (n >= rows.length) return rows;
+  const indexed = rows.map((r, i) => ({ r, i }));
+  indexed.sort((a, b) =>
+    b.r.votes !== a.r.votes ? b.r.votes - a.r.votes : a.i - b.i,
+  );
+  const chosen = indexed.slice(0, n);
+  chosen.sort((a, b) => a.i - b.i);
+  return chosen.map((x) => x.r);
+}
+
+async function main() {
+  const text = await loadSourceText();
+  const rows = parseTSV(text);
+
+  const filtered = rows.filter((r) => r.votes >= MIN_VOTES);
+  process.stdout.write(
+    `kept ${filtered.length.toLocaleString()} rows (votes >= ${MIN_VOTES})\n`,
+  );
+
+  const full = packRows(filtered);
+  const sourceSha = createHash("sha256").update(text).digest("hex");
+  const baseMeta = {
     totalVerses: TOTAL_VERSES,
     builtAt: new Date().toISOString(),
     sourceSha256: sourceSha,
@@ -343,14 +395,50 @@ async function main() {
     license: "CC BY 4.0 — © OpenBible.info",
   };
 
-  await mkdir(dirname(OUT_BIN), { recursive: true });
-  await writeFile(OUT_BIN, bin);
-  await writeFile(OUT_META, JSON.stringify(meta, null, 2) + "\n");
+  const fullMeta = {
+    variant: "all" as const,
+    count: full.count,
+    minVotesFilter: MIN_VOTES,
+    votesMin: full.votesMin,
+    votesMax: full.votesMax,
+    ...baseMeta,
+  };
 
+  await mkdir(dirname(OUT_BIN), { recursive: true });
+  await writeFile(OUT_BIN, full.bin);
+  await writeFile(OUT_META, JSON.stringify(fullMeta, null, 2) + "\n");
   process.stdout.write(
-    `wrote ${OUT_BIN} (${(bin.length / 1024).toFixed(1)} KB)\n`,
+    `wrote ${OUT_BIN} (${(full.bin.length / 1024).toFixed(1)} KB, ${full.count.toLocaleString()} arcs)\n`,
   );
-  process.stdout.write(`wrote ${OUT_META}\n`);
+
+  // Recognized subset: top N by votes. When the full set is already <= N
+  // (e.g. someone ran with a very aggressive --min-votes filter), we fall
+  // back to the full set rather than silently producing an empty file.
+  const recognizedRows = topByVotes(filtered, RECOGNIZED_COUNT);
+  const recognized = packRows(recognizedRows);
+  const recognizedThreshold =
+    recognizedRows.length > 0
+      ? Math.min(...recognizedRows.map((r) => r.votes))
+      : null;
+  const recognizedMeta = {
+    variant: "recognized" as const,
+    count: recognized.count,
+    minVotesFilter: MIN_VOTES,
+    votesMin: recognized.votesMin,
+    votesMax: recognized.votesMax,
+    recognizedTarget: RECOGNIZED_COUNT,
+    recognizedEffectiveThreshold: recognizedThreshold,
+    ...baseMeta,
+  };
+
+  await writeFile(OUT_BIN_RECOGNIZED, recognized.bin);
+  await writeFile(
+    OUT_META_RECOGNIZED,
+    JSON.stringify(recognizedMeta, null, 2) + "\n",
+  );
+  process.stdout.write(
+    `wrote ${OUT_BIN_RECOGNIZED} (${(recognized.bin.length / 1024).toFixed(1)} KB, ${recognized.count.toLocaleString()} arcs, votes >= ${recognizedThreshold ?? "n/a"})\n`,
+  );
 }
 
 main().catch((err) => {

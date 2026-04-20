@@ -157,3 +157,16 @@ export function formatRef(r: BibleRef): string {
   }
   return out;
 }
+
+/**
+ * Structural equality for two `BibleRef`s, used by the tag-style reference
+ * input to de-duplicate when a user types a ref that's already tagged.
+ */
+export function refsEqual(a: BibleRef, b: BibleRef): boolean {
+  return (
+    a.book === b.book &&
+    a.chapter === b.chapter &&
+    (a.verseStart ?? null) === (b.verseStart ?? null) &&
+    (a.verseEnd ?? null) === (b.verseEnd ?? null)
+  );
+}

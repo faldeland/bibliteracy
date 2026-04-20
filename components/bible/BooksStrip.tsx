@@ -36,6 +36,13 @@ interface BooksStripProps {
   hideLabels?: boolean;
   /** Highlight a single book id, e.g. on hover from a tooltip. */
   highlightBookId?: string | null;
+  /**
+   * Book that's been click-pinned by the parent — rendered with a stronger
+   * ring so the user knows the filter will stick after the cursor leaves
+   * the strip. Pass the same id as `highlightBookId` for the standard
+   * "pinned and in focus" appearance.
+   */
+  pinnedBookId?: string | null;
   onHoverBook?: (bookId: string | null) => void;
   onSelectBook?: (bookId: string) => void;
 }
@@ -65,6 +72,7 @@ export function BooksStrip({
   height = 22,
   hideLabels = false,
   highlightBookId = null,
+  pinnedBookId = null,
   onHoverBook,
   onSelectBook,
 }: BooksStripProps) {
@@ -81,11 +89,17 @@ export function BooksStrip({
             highlightBookId !== null && highlightBookId !== book.id
               ? "opacity-40"
               : "";
+          const isPinned = pinnedBookId === book.id;
           return (
             <button
               key={book.id}
               type="button"
-              title={`${book.name} — ${book.chapters} ch`}
+              title={
+                isPinned
+                  ? `${book.name} — click to unpin`
+                  : `${book.name} — ${book.chapters} ch`
+              }
+              aria-pressed={isPinned}
               onMouseEnter={() => onHoverBook?.(book.id)}
               onMouseLeave={() => onHoverBook?.(null)}
               onClick={() => onSelectBook?.(book.id)}
@@ -94,6 +108,8 @@ export function BooksStrip({
                 SECTION_TINT[book.section],
                 dim,
                 "hover:brightness-95",
+                isPinned &&
+                  "z-10 outline-2 -outline-offset-2 outline-[var(--color-ink)]",
               )}
               style={{ width: `${width * 100}%` }}
             />

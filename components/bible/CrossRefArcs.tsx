@@ -6,8 +6,19 @@ import {
   bookRange,
   verseFromIndex,
 } from "@/lib/bible/globalVerseIndex";
+
+// When a book is hovered, fade the background firehose to this alpha so the
+// book-scoped overlay reads as the foreground without actually hiding the
+// poster entirely (0.06 is enough to still sense the shape underneath).
+const BASE_FADE_ALPHA = 0.08;
 import { BIBLE_BOOKS } from "@/lib/bible/books";
-import { loadCrossReferences, type XRefData } from "@/lib/bible/xrefsClient";
+import {
+  DEFAULT_XREF_VARIANT,
+  loadCrossReferences,
+  type XRefData,
+  type XRefVariant,
+} from "@/lib/bible/xrefsClient";
+import { cn } from "@/lib/utils";
 
 // ── Rendering parameters ──────────────────────────────────────────────────
 //
@@ -94,11 +105,24 @@ interface CrossRefArcsProps {
   /** Layout mode for the x-axis. Defaults to verse-uniform (poster mode). */
   xMode?: XAxisMode;
   /**
+   * Which cross-reference dataset to draw. Defaults to "recognized" — the
+   * 63,779 high-confidence Harrison/Römhild core. Pass "all" to draw the
+   * full ~343k-arc firehose.
+   */
+  variant?: XRefVariant;
+  /**
    * If set, only arcs touching this verse index get drawn at full opacity;
    * everything else fades to a faint background. Set to null/undefined to
    * show the full firehose.
    */
   highlightVerseIndex?: number | null;
+  /**
+   * If set, only arcs with at least one endpoint inside this book's global
+   * verse range are drawn; the rest of the firehose fades to the background.
+   * When both `highlightVerseIndex` and `highlightBookId` are set, the verse
+   * takes precedence (it's strictly more specific).
+   */
+  highlightBookId?: string | null;
   /**
    * Hide every arc whose midpoint lies outside this normalized x-range
    * [0, 1]. Useful if we ever want a lensed/zoomed view; for now it stays
@@ -107,6 +131,8 @@ interface CrossRefArcsProps {
   xRange?: [number, number];
   /** Called when the user hovers an arc. */
   onHoverArc?: (info: ArcHoverInfo | null) => void;
+  /** Called when the user clicks an arc (same hit-test rules as hover). */
+  onClickArc?: (info: ArcHoverInfo) => void;
 }
 
 export interface ArcHoverInfo {
@@ -123,10 +149,17 @@ export function CrossRefArcs({
   width,
   height,
   xMode = "verse",
+  variant = DEFAULT_XREF_VARIANT,
   highlightVerseIndex = null,
+  highlightBookId = null,
   xRange,
   onHoverArc,
+  onClickArc,
 }: CrossRefArcsProps) {
+  // Whenever any kind of highlight is active, the background firehose
+  // becomes scaffolding rather than the subject — we dim it via CSS so we
+  // don't have to rerender the (expensive) base canvas on every hover.
+  const isHighlighting = highlightVerseIndex != null || !!highlightBookId;
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const [data, setData] = useState<XRefData | null>(null);
@@ -134,7 +167,10 @@ export function CrossRefArcs({
 
   useEffect(() => {
     let alive = true;
-    loadCrossReferences()
+    // Clear the stale dataset while swapping variants so the overlay +
+    // hit-testing don't briefly describe arcs that aren't on screen.
+    setData(null);
+    loadCrossReferences(variant)
       .then((d) => {
         if (alive) setData(d);
       })
@@ -144,7 +180,7 @@ export function CrossRefArcs({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [variant]);
 
   // Draw the firehose into the base canvas. Re-runs only when the data,
   // the dimensions, or the layout mode change — NOT on hover.
@@ -169,7 +205,7 @@ export function CrossRefArcs({
     const xMax = xRange ? xRange[1] * width : width;
 
     ctx.globalAlpha = ARC_ALPHA;
-    ctx.lineWidth = 0.6;
+    ctx.lineWidth = 0.35;
 
     // Group arcs by ramp bucket so we change strokeStyle ~256 times instead
     // of ~340k times. ~3× faster on Chrome / Safari in informal benchmarks.
@@ -206,8 +242,9 @@ export function CrossRefArcs({
     }
   }, [data, width, height, xMode, xRange]);
 
-  // Highlight pass: redraw only arcs touching `highlightVerseIndex`. Lives
-  // on a separate canvas so the firehose isn't repainted on every hover.
+  // Highlight pass: redraw only arcs touching the active highlight (either a
+  // single verse or every verse inside a hovered book). Lives on a separate
+  // canvas so the firehose isn't repainted on every hover.
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !data || width <= 0 || height <= 0) return;
@@ -220,20 +257,42 @@ export function CrossRefArcs({
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    if (highlightVerseIndex == null) return;
+    if (highlightVerseIndex == null && !highlightBookId) return;
+
+    // Verse takes precedence — it's the stricter filter. If a book is
+    // hovered instead, fall back to its [start, end) range.
+    const bookR =
+      highlightVerseIndex == null && highlightBookId
+        ? bookRange(highlightBookId)
+        : null;
+    const hits = (a: number, b: number): boolean => {
+      if (highlightVerseIndex != null) {
+        return a === highlightVerseIndex || b === highlightVerseIndex;
+      }
+      if (bookR) {
+        return (
+          (a >= bookR.start && a < bookR.end) ||
+          (b >= bookR.start && b < bookR.end)
+        );
+      }
+      return false;
+    };
 
     const xOf = makeXMapper(width, xMode);
     const baseline = height - BASELINE_PADDING;
     const maxRadius = baseline;
 
-    ctx.globalAlpha = HIGHLIGHT_ALPHA;
-    ctx.lineWidth = 1.25;
+    // Book-scoped highlights can cover thousands of arcs; a single
+    // globalAlpha produces readable density. Verse-scoped is usually tiny,
+    // so a brighter alpha is fine.
+    ctx.globalAlpha = bookR ? 0.55 : HIGHLIGHT_ALPHA;
+    ctx.lineWidth = bookR ? 0.5 : 0.8;
 
     const pairs = data.pairs;
     for (let i = 0; i < pairs.length; i += 2) {
       const a = pairs[i];
       const b = pairs[i + 1];
-      if (a !== highlightVerseIndex && b !== highlightVerseIndex) continue;
+      if (!hits(a, b)) continue;
       const xa = xOf(a);
       const xb = xOf(b);
       const mid = (xa + xb) / 2;
@@ -243,38 +302,51 @@ export function CrossRefArcs({
       ctx.arc(mid, baseline, r, Math.PI, 2 * Math.PI);
       ctx.stroke();
     }
-  }, [data, width, height, xMode, highlightVerseIndex]);
+  }, [data, width, height, xMode, highlightVerseIndex, highlightBookId]);
 
-  // Hover hit-test. Cheaper than full pixel-perfect picking: find the
+  // Shared hit-test. Cheaper than full pixel-perfect picking: find the
   // nearest arc whose baseline-vertex distance to the cursor is small.
   // Arcs are half-circles centered on `mid` with radius `r`, so the
   // distance from the cursor to the arc is `||cursor - mid|| - r|` for
   // y < baseline. We pick the smallest such residual within a 6 px
-  // tolerance, which feels right interactively.
-  function onMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (!data || !onHoverArc) return;
-    const host = e.currentTarget;
+  // tolerance, which feels right interactively. Returns `null` when the
+  // cursor is below the baseline or no arc is close enough.
+  function hitTest(
+    host: HTMLElement,
+    clientX: number,
+    clientY: number,
+  ): ArcHoverInfo | null {
+    if (!data) return null;
     const rect = host.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
+    const cx = clientX - rect.left;
+    const cy = clientY - rect.top;
     const baseline = height - BASELINE_PADDING;
-    if (cy > baseline) {
-      onHoverArc(null);
-      return;
-    }
+    if (cy > baseline) return null;
     const xOf = makeXMapper(width, xMode);
+    // When a book is hovered, only arcs with an endpoint inside that book
+    // are visible — restrict the hit-test to the same set so the tooltip
+    // never describes an arc the user can't actually see.
+    const bookR = highlightBookId ? bookRange(highlightBookId) : null;
     const pairs = data.pairs;
     let bestResidual = 6;
     let bestIdx = -1;
     for (let i = 0; i < pairs.length; i += 2) {
       const a = pairs[i];
       const b = pairs[i + 1];
+      if (
+        bookR &&
+        !(
+          (a >= bookR.start && a < bookR.end) ||
+          (b >= bookR.start && b < bookR.end)
+        )
+      ) {
+        continue;
+      }
       const xa = xOf(a);
       const xb = xOf(b);
       const mid = (xa + xb) / 2;
       const r = Math.abs(xb - xa) / 2;
       if (r < 1) continue;
-      // Cheap rejection: cursor must lie within the arc's bounding box.
       if (cx < mid - r || cx > mid + r) continue;
       if (cy < baseline - r) continue;
       const dx = cx - mid;
@@ -286,23 +358,28 @@ export function CrossRefArcs({
         bestIdx = i;
       }
     }
-    if (bestIdx === -1) {
-      onHoverArc(null);
-      return;
-    }
+    if (bestIdx === -1) return null;
     const a = pairs[bestIdx];
     const b = pairs[bestIdx + 1];
     const fromRef = verseFromIndex(a);
     const toRef = verseFromIndex(b);
-    if (!fromRef || !toRef) {
-      onHoverArc(null);
-      return;
-    }
-    onHoverArc({ fromIdx: a, toIdx: b, fromRef, toRef, x: cx, y: cy });
+    if (!fromRef || !toRef) return null;
+    return { fromIdx: a, toIdx: b, fromRef, toRef, x: cx, y: cy };
+  }
+
+  function onMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!onHoverArc) return;
+    onHoverArc(hitTest(e.currentTarget, e.clientX, e.clientY));
   }
 
   function onLeave() {
     onHoverArc?.(null);
+  }
+
+  function onClick(e: React.MouseEvent<HTMLDivElement>) {
+    if (!onClickArc) return;
+    const hit = hitTest(e.currentTarget, e.clientX, e.clientY);
+    if (hit) onClickArc(hit);
   }
 
   if (error) {
@@ -315,19 +392,25 @@ export function CrossRefArcs({
 
   return (
     <div
-      className="relative"
+      className={cn("relative", onClickArc && "cursor-pointer")}
       style={{ width, height }}
       onPointerMove={onMove}
       onPointerLeave={onLeave}
+      onClick={onClick}
     >
-      <canvas ref={baseRef} className="absolute inset-0" />
+      <canvas
+        ref={baseRef}
+        className="absolute inset-0 transition-opacity duration-150"
+        style={{ opacity: isHighlighting ? BASE_FADE_ALPHA : 1 }}
+      />
       <canvas
         ref={overlayRef}
         className="pointer-events-none absolute inset-0"
       />
       {!data && (
         <div className="absolute inset-0 flex items-center justify-center text-xs uppercase tracking-widest text-[var(--color-ink-2)]">
-          Loading {(2700).toLocaleString()} KB of cross-references…
+          Loading {variant === "recognized" ? "recognized" : "all"}{" "}
+          cross-references…
         </div>
       )}
     </div>

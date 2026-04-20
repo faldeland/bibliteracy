@@ -16,6 +16,7 @@ function mkDot(
     kind: "logos",
     occurredOn: "2026-04-19",
     refs,
+    tags: [],
     visibility: "private",
     createdAt: "2026-04-19T00:00:00Z",
     updatedAt: "2026-04-19T00:00:00Z",

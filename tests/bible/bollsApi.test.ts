@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bollsIdFor,
   bookForBollsId,
+  fetchChapter,
   parseVerseTokens,
   pickShortGloss,
   type BollsDictRow,
@@ -115,7 +116,7 @@ describe("parseVerseTokens — Strong's-tagged HTML", () => {
       "the Word<S>3056</S> was<S>2258</S> God<S>2316</S>.<sup>a</sup><f>note</f><i>(emph)</i>";
     const { plain, tokens } = parseVerseTokens(html, "NT");
     expect(plain).not.toMatch(/<|note|emph/);
-    expect(plain).toBe("the Word was God .");
+    expect(plain).toBe("the Word was God.");
     // <i>/<f>/<sup> chunks are stripped before tokenization, so they don't
     // break Strong's alignment. The three Strong's-tagged tokens are intact;
     // a final tail token captures the trailing "." with no Strong's number.
@@ -124,6 +125,15 @@ describe("parseVerseTokens — Strong's-tagged HTML", () => {
     const tail = tokens[tokens.length - 1];
     expect(tail.strong).toBeNull();
     expect(tail.text).toBe(".");
+  });
+
+  it("closes the gap Bolls leaves between a word and its trailing punctuation", () => {
+    // Bolls puts sentence punctuation OUTSIDE the Strong's tags; the naive
+    // strip produced "tongue , against man or beast :".
+    const html =
+      "his tongue<S>03956</S> , against man<S>0376</S> or beast<S>0929</S> :";
+    const { plain } = parseVerseTokens(html, "OT");
+    expect(plain).toBe("his tongue, against man or beast:");
   });
 
   it("handles a verse with no Strong's tags at all", () => {
@@ -196,5 +206,22 @@ describe("pickShortGloss", () => {
 
   it("returns an em-dash when there's truly nothing to gloss", () => {
     expect(pickShortGloss(row({}))).toBe("—");
+  });
+});
+
+describe("fetchChapter — upstream network", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("wraps Undici 'fetch failed' with a bolls.life-specific message after retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(fetchChapter("Jhn", 3, "KJV")).rejects.toThrow(
+      /bolls\.life unreachable/,
+    );
+    expect(fetchMock.mock.calls.length).toBe(2);
   });
 });
