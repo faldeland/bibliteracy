@@ -241,15 +241,15 @@ export function GridCanvas({
     return () => el.removeEventListener("wheel", handler);
   }, []);
 
-  // Keyboard: arrows pan, +/- zoom, T = today.
+  // Keyboard: +/- zoom, T = today. ArrowLeft/ArrowRight are intentionally
+  // NOT handled here — those belong to the Bible reader (prev/next verse)
+  // so the two navigations don't fight over the same keys.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
       if (e.target instanceof HTMLTextAreaElement) return;
       const px = useGridStore.getState().pxPerDay;
-      if (e.key === "ArrowLeft") panByPx(-px * 7);
-      else if (e.key === "ArrowRight") panByPx(px * 7);
-      else if (e.key === "+" || e.key === "=") {
+      if (e.key === "+" || e.key === "=") {
         const rect = panRef.current?.getBoundingClientRect();
         if (rect) zoomAt({ newPxPerDay: px * 1.25, cursorPx: rect.width / 2, viewportPx: rect.width });
       } else if (e.key === "-" || e.key === "_") {
@@ -261,7 +261,7 @@ export function GridCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [panByPx, zoomAt, recenterOnToday]);
+  }, [zoomAt, recenterOnToday]);
 
   const [activeDotId, setActiveDotId] = useState<string | null>(null);
   const activeDot = useMemo(
@@ -447,7 +447,6 @@ export function GridCanvas({
           onPointerCancel={onPointerUp}
           onWheel={onWheel}
         >
-          <TimeRuler viewportWidth={viewportWidth} />
           {/* Scrollable lanes stack. Horizontal panning is handled by
               re-centering via pxPerDay/centerDate (not native scroll), so
               we only expose vertical scrolling here — the stack grows
@@ -492,6 +491,12 @@ export function GridCanvas({
               />
             )}
           </div>
+          {/* Date header sits at the bottom of the canvas, directly above
+              the footer nav, so tick labels are next to the zoom controls
+              that drive their granularity. Keeping it inside the pan
+              container means wheel/drag zoom + pan still work over the
+              ruler region. */}
+          <TimeRuler viewportWidth={viewportWidth} />
         </div>
 
         {/* Connector lines from dots up to the books they reference. Sits

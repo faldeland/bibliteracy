@@ -446,7 +446,7 @@ export function BibleSearchBar({ current, onNavigate, recents }: Props) {
     <div ref={wrapRef} className="relative w-full max-w-[18.9rem]">
       <div
         className={cn(
-          "flex h-7 items-center gap-2 rounded-md border bg-white px-2.5 transition-all",
+          "flex h-7 items-center gap-2 rounded-md border bg-white pl-2.5 pr-1 transition-all",
           open
             ? "border-[var(--color-ink)]/40 shadow-[0_2px_12px_-4px_rgba(31,27,22,0.25)]"
             : "border-[var(--color-rule)] hover:border-[var(--color-ink-2)]/40",
@@ -484,7 +484,7 @@ export function BibleSearchBar({ current, onNavigate, recents }: Props) {
             <ClearIcon className="h-3.5 w-3.5" />
           </button>
         )}
-        <kbd className="hidden shrink-0 select-none rounded border border-[var(--color-rule)] bg-[var(--color-paper)] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-[var(--color-ink-2)] sm:inline">
+        <kbd className="hidden shrink-0 select-none rounded border border-[var(--color-rule)] bg-[var(--color-paper)] px-1 py-px font-mono text-[9px] uppercase tracking-widest text-[var(--color-ink-2)] sm:inline">
           ⌘S
         </kbd>
       </div>

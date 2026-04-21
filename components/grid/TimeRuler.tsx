@@ -43,23 +43,23 @@ export function TimeRuler({ viewportWidth }: TimeRulerProps) {
   const todayLeft = diffDays(now, centerDate) * pxPerDay + halfPx;
 
   return (
-    <div className="relative h-8 w-full select-none border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]/40">
+    <div className="relative h-8 w-full select-none border-t border-[var(--color-rule)] bg-[var(--color-paper-2)]/40">
       {ticks.map(({ date, left, major }) =>
         major ? (
           <div
             key={date.toISOString()}
-            className="absolute top-0 h-full"
+            className="absolute top-0 flex h-full flex-col items-start"
             style={{ left }}
           >
-            <div className="h-3 w-px bg-[var(--color-ink-2)]/60" />
-            <div className="mt-0.5 -translate-x-1/2 whitespace-nowrap text-[10px] font-medium uppercase tracking-wide text-[var(--color-ink-2)]">
+            <div className="-translate-x-1/2 whitespace-nowrap text-[10px] font-medium uppercase tracking-wide text-[var(--color-ink-2)]">
               {formatTickLabel(date, zoom)}
             </div>
+            <div className="mt-auto h-3 w-px bg-[var(--color-ink-2)]/60" />
           </div>
         ) : (
           <div
             key={date.toISOString()}
-            className="absolute top-0 h-1.5 w-px bg-[var(--color-ink-2)]/20"
+            className="absolute bottom-0 h-1.5 w-px bg-[var(--color-ink-2)]/20"
             style={{ left }}
           />
         ),
@@ -75,10 +75,11 @@ export function TimeRuler({ viewportWidth }: TimeRulerProps) {
         </div>
       )}
 
-      {/* Center marker */}
+      {/* Center marker — now anchored to the top edge so it points up into
+          the lanes, since the ruler has moved to the bottom of the canvas. */}
       {ticks.some(({ date }) => isSameDay(date, centerDate)) && (
         <div
-          className="pointer-events-none absolute bottom-0 h-1 w-px bg-[var(--color-ink)]/40"
+          className="pointer-events-none absolute top-0 h-1 w-px bg-[var(--color-ink)]/40"
           style={{ left: halfPx }}
         />
       )}

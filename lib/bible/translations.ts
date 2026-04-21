@@ -1,12 +1,16 @@
 // Bible translations available through the keyless bolls.life API.
 //
-// We expose two tiers of translation here:
+// Every translation renders as a normal verse paragraph in the reader; the
+// per-word interlinear lemma row is reserved for the original-language
+// Hebrew and Greek texts (Tanakh / Septuagint / Greek NT). The `hasStrongs`
+// flag still matters because:
 //
-//   1. Strong's-tagged translations (`hasStrongs: true`) — their `text` field
-//      embeds inline `<S>####</S>` tags, which powers the per-word interlinear
-//      lemma row and the BDB / Thayer's word-study popover.
-//   2. Plain translations (`hasStrongs: false`) — rendered as a normal verse
-//      paragraph in the reader. The interlinear row is suppressed.
+//   1. Entries whose `text` field embeds inline `<S>####</S>` tags power the
+//      BDB / Thayer's word-study popover and the cross-reference links.
+//   2. When the user reads a non-Strong's English translation, the reader
+//      shows a KJV parallel row underneath so a Strong's-tagged reference is
+//      always one glance away. KJV must stay `hasStrongs: true` for that to
+//      work even though its primary display is now a plain paragraph.
 //
 // ─── Licensing notice (please read) ──────────────────────────────────────────
 //
@@ -30,7 +34,6 @@ export type TranslationLicense =
   | "licensed-via-publisher-api"
   | "unknown";
 export type TranslationGroup =
-  | "English (with Strong's)"
   | "English (Modern)"
   | "English (Classic)"
   | "English (Catholic)"
@@ -103,32 +106,6 @@ type RawTranslation = Omit<Translation, "provider"> & {
 };
 
 const RAW_TRANSLATIONS: readonly RawTranslation[] = [
-  // ── English with Strong's tags (interlinear works) ───────────────────────
-  {
-    id: "KJV",
-    label: "KJV",
-    fullName: "King James Version 1769 (with Apocrypha + Strong's Numbers)",
-    language: "English",
-    dir: "ltr",
-    coverage: "ALL",
-    hasStrongs: true,
-    original: false,
-    group: "English (with Strong's)",
-    license: "public-domain",
-  },
-  {
-    id: "ASV",
-    label: "ASV",
-    fullName: "American Standard Version 1901 (with Strong's Numbers)",
-    language: "English",
-    dir: "ltr",
-    coverage: "ALL",
-    hasStrongs: true,
-    original: false,
-    group: "English (with Strong's)",
-    license: "public-domain",
-  },
-
   // ── English, modern (no Strong's) ────────────────────────────────────────
   {
     id: "BSB",
@@ -454,7 +431,34 @@ const RAW_TRANSLATIONS: readonly RawTranslation[] = [
     license: "copyrighted",
   },
 
-  // ── English, classic (no Strong's) ───────────────────────────────────────
+  // ── English, classic ─────────────────────────────────────────────────────
+  // KJV and ASV embed Strong's tags so they still drive the word-study
+  // popover and the KJV parallel strip, but the primary verse renders as a
+  // plain paragraph like every other translation.
+  {
+    id: "KJV",
+    label: "KJV",
+    fullName: "King James Version 1769 (with Apocrypha + Strong's Numbers)",
+    language: "English",
+    dir: "ltr",
+    coverage: "ALL",
+    hasStrongs: true,
+    original: false,
+    group: "English (Classic)",
+    license: "public-domain",
+  },
+  {
+    id: "ASV",
+    label: "ASV",
+    fullName: "American Standard Version 1901 (with Strong's Numbers)",
+    language: "English",
+    dir: "ltr",
+    coverage: "ALL",
+    hasStrongs: true,
+    original: false,
+    group: "English (Classic)",
+    license: "public-domain",
+  },
   {
     id: "YLT",
     label: "YLT",

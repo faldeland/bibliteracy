@@ -135,6 +135,9 @@ const DEFAULT_VERSE = 16;
 const RECENTS_STORAGE_KEY = "bibliteracy:bible:recents";
 const RECENTS_MAX = 8;
 const TRANSLATION_STORAGE_KEY = "bibliteracy:bible:translation";
+const CONTEXT_STORAGE_KEY = "bibliteracy:bible:contextCount";
+// Cap so a stray big number can't render the whole chapter in one scroll.
+const CONTEXT_MAX = 20;
 
 // ─── Component ────────────────────────────────────────────────────────────
 
@@ -150,8 +153,11 @@ export function BibleReader() {
 
   // ── Translation (persisted in localStorage) ────────────────────────────
   // The picker exposes every translation served by bolls.life (see
-  // lib/bible/translations.ts). Translations whose `hasStrongs` is true
-  // drive the per-word interlinear; others render as a plain paragraph.
+  // lib/bible/translations.ts). The per-word interlinear is reserved for
+  // the original-language texts (Hebrew Tanakh, Greek NT); every English
+  // translation — KJV and ASV included — renders as a plain paragraph.
+  // Strong's-tagged English translations still power the word-study
+  // popover through the KJV parallel strip underneath.
   // When the user navigates to a book in a testament the current translation
   // doesn't cover (e.g. WLCa is OT-only and they jump to John), we
   // transparently swap to the default for that session without overwriting
@@ -352,6 +358,43 @@ export function BibleReader() {
     return chapterData.find((v) => v.verse === verse) ?? chapterData[0] ?? null;
   }, [chapterData, verse]);
 
+  // ── Leading-context verses ────────────────────────────────────────────
+  // The user can ask to see N verses BEFORE the active verse so the
+  // interlinear sits in its passage context. We stay inside the
+  // currently-loaded chapter (no extra fetches) and render them in a
+  // smaller font above the active verse.
+  const [contextCount, setContextCount] = useState<number>(0);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(CONTEXT_STORAGE_KEY);
+      if (stored == null) return;
+      const n = Number.parseInt(stored, 10);
+      if (Number.isFinite(n) && n >= 0) {
+        setContextCount(Math.min(CONTEXT_MAX, n));
+      }
+    } catch {
+      // ignore privacy-mode / quota errors
+    }
+  }, []);
+  const handleContextCountChange = useCallback((next: number) => {
+    const clamped = Math.max(
+      0,
+      Math.min(CONTEXT_MAX, Number.isFinite(next) ? Math.floor(next) : 0),
+    );
+    setContextCount(clamped);
+    try {
+      window.localStorage.setItem(CONTEXT_STORAGE_KEY, String(clamped));
+    } catch {
+      // ignore
+    }
+  }, []);
+  const contextBefore = useMemo<ParsedVerse[]>(() => {
+    if (!chapterData || contextCount === 0) return [];
+    return chapterData.filter(
+      (v) => v.verse < verse && v.verse >= verse - contextCount,
+    );
+  }, [chapterData, verse, contextCount]);
+
   // ── Prev/next verse navigation ────────────────────────────────────────
   // Flow rules: step through verses within a chapter, then across chapters
   // within a book, then across books along the canonical `order` field
@@ -423,14 +466,21 @@ export function BibleReader() {
     return () => window.removeEventListener("keydown", onKey);
   }, [prevTarget, nextTarget, handleNavigate]);
 
-  // ── KJV parallel reference ────────────────────────────────────────────
-  // We always want a Strong's-tagged interlinear visible. If the user
-  // picks a translation that doesn't carry Strong's tags, fetch KJV for
-  // the same chapter and render its matching verse as a second row with
-  // the full word-study UI underneath. Skipped when KJV is already the
-  // selected translation (single interlinear is enough).
+  // ── Interlinear / parallel policy ─────────────────────────────────────
+  // Only the original-language Hebrew / Greek texts render their primary
+  // verse as an interlinear — every English translation (even the ones
+  // that carry Strong's tags, like KJV and ASV) renders as a plain
+  // paragraph so the verse display is consistent across versions.
+  const renderAsInterlinear =
+    effectiveTranslation.hasStrongs && effectiveTranslation.original;
+  // We always want a Strong's-tagged interlinear visible somewhere on the
+  // page. When the primary verse isn't itself an interlinear, fetch KJV
+  // for the same chapter and render its matching verse as a second row
+  // with the full word-study UI underneath. Skipped when KJV is already
+  // the selected translation (a plain KJV + its own parallel would be
+  // redundant).
   const showKjvParallel =
-    !effectiveTranslation.hasStrongs && effectiveTranslation.id !== "KJV";
+    !renderAsInterlinear && effectiveTranslation.id !== "KJV";
   const [kjvVerses, setKjvVerses] = useState<ParsedVerse[] | null>(null);
   useEffect(() => {
     if (!showKjvParallel) {
@@ -458,10 +508,10 @@ export function BibleReader() {
   }, [kjvVerses, verse]);
 
   // The verse whose Strong's tokens drive the word-study fetch + popover.
-  // When the selected translation already has Strong's, that's it; when
-  // we're showing a KJV parallel underneath, the popover hangs off the
-  // KJV row instead.
-  const studyVerse: ParsedVerse | null = effectiveTranslation.hasStrongs
+  // When the primary is an original-language interlinear, the popover
+  // hangs off its tokens directly; otherwise it hangs off the KJV
+  // parallel row below.
+  const studyVerse: ParsedVerse | null = renderAsInterlinear
     ? currentVerse
     : kjvCurrentVerse;
 
@@ -602,7 +652,11 @@ export function BibleReader() {
   const headerSlot = useBibleHeaderSlotTarget();
   const headerControls = (
     <>
-      <div className="flex min-w-0 flex-1 items-center">
+      {/* Fixed-width wrapper so the version picker can sit directly to the
+          right of the search bar instead of being pushed to the far edge of
+          the header slot. The width matches the search bar's own internal
+          max-width. */}
+      <div className="flex w-[18.9rem] shrink-0 items-center">
         <BibleSearchBar
           current={{ bookId, chapter, verse }}
           onNavigate={handleNavigate}
@@ -610,41 +664,17 @@ export function BibleReader() {
         />
       </div>
 
-      <span className="hidden shrink-0 whitespace-nowrap text-[11px] text-[var(--color-ink-2)] lg:inline">
-        {book.name} {chapter}:{verse}
-        {effectiveTranslation.id !== preferredTranslation.id && (
-          <span className="ml-1 italic text-[var(--color-ink-2)]/70">
-            (fallback)
-          </span>
-        )}
-        {effectiveTranslation.license === "copyrighted" && (
-          <span
-            className="ml-1 italic text-amber-700/80"
-            title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
-          >
-            © unlicensed
-          </span>
-        )}
-        {effectiveTranslation.license === "licensed-via-publisher-api" && (
-          <span
-            className="ml-1 italic text-emerald-700/80"
-            title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
-          >
-            ⚐ via {effectiveTranslation.provider.toUpperCase()}
-          </span>
-        )}
-      </span>
-
       {/* Translation picker — click or press ⌘D to open the searchable
           modal. The button itself shows the active selection so users
-          always see what they're reading. */}
+          always see what they're reading. Sits immediately to the right of
+          the verse-search bar so the two reading controls travel together. */}
       <button
         type="button"
         onClick={() => setPickerOpen(true)}
         title={`${preferredTranslation.fullName} — search translations (⌘D)`}
         aria-label={`Translation: ${preferredTranslation.label}. Open picker.`}
         aria-haspopup="dialog"
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-rule)] bg-white px-2 text-[11px] text-[var(--color-ink)] hover:border-[var(--color-ink-2)]/50"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-rule)] bg-white pl-2 pr-1 text-[11px] text-[var(--color-ink)] hover:border-[var(--color-ink-2)]/50"
       >
         <span className="font-mono uppercase tracking-wide">
           {preferredTranslation.label}
@@ -661,6 +691,24 @@ export function BibleReader() {
           ⌘D
         </kbd>
       </button>
+
+      {/* Prev / next verse arrows. Moved up from the verse row so the primary
+          reading navigation (search → version → step through verses) lives
+          together in one horizontal control strip. */}
+      <div className="flex shrink-0 items-center gap-1">
+        <VerseArrow
+          direction="prev"
+          label={prevTarget ? formatNavLabel(prevTarget) : null}
+          disabled={!prevTarget}
+          onClick={() => prevTarget && handleNavigate(prevTarget)}
+        />
+        <VerseArrow
+          direction="next"
+          label={nextTarget ? formatNavLabel(nextTarget) : null}
+          disabled={!nextTarget}
+          onClick={() => nextTarget && handleNavigate(nextTarget)}
+        />
+      </div>
     </>
   );
 
@@ -701,13 +749,34 @@ export function BibleReader() {
           <>
             {/* Translation label — mirrors the KJV parallel label so every
                 rendered verse is unambiguously attributed in-line. The
-                publisher attribution rides on the same row to save
+                selected verse reference sits next to it (moved out of the
+                top nav so the header stays focused on global controls), and
+                the publisher attribution rides on the same row to save
                 vertical space. */}
             <div className="mb-1 flex items-baseline gap-3">
               <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
                 {effectiveTranslation.label}
               </span>
-              {effectiveTranslation.hasStrongs && (
+              <span className="shrink-0 font-serif text-[12px] text-[var(--color-ink)]">
+                {book.name} {chapter}:{verse}
+              </span>
+              {effectiveTranslation.license === "copyrighted" && (
+                <span
+                  className="shrink-0 text-[10px] italic text-amber-700/80"
+                  title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
+                >
+                  © unlicensed
+                </span>
+              )}
+              {effectiveTranslation.license === "licensed-via-publisher-api" && (
+                <span
+                  className="shrink-0 text-[10px] italic text-emerald-700/80"
+                  title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
+                >
+                  ⚐ via {effectiveTranslation.provider.toUpperCase()}
+                </span>
+              )}
+              {renderAsInterlinear && (
                 <span className="shrink-0 text-[10px] italic text-[var(--color-ink-2)]/70">
                   with BDB-Thayer&apos;s
                 </span>
@@ -720,6 +789,11 @@ export function BibleReader() {
                   (fallback from {preferredTranslation.label})
                 </span>
               )}
+              <ContextCountInput
+                value={contextCount}
+                max={CONTEXT_MAX}
+                onChange={handleContextCountChange}
+              />
               {chapterAttribution && (
                 <span
                   className="ml-auto min-w-0 truncate text-right text-[10px] font-light leading-snug text-[var(--color-ink-2)]/45"
@@ -729,21 +803,16 @@ export function BibleReader() {
                 </span>
               )}
             </div>
+            {contextBefore.length > 0 && (
+              <ContextVerses
+                verses={contextBefore}
+                dir={effectiveTranslation.dir}
+                onJump={(v) => handleNavigate({ bookId, chapter, verse: v })}
+              />
+            )}
             <div className="flex items-stretch gap-1.5">
-              <VerseArrow
-                direction="prev"
-                label={prevTarget ? formatNavLabel(prevTarget) : null}
-                disabled={!prevTarget}
-                onClick={() => prevTarget && handleNavigate(prevTarget)}
-              />
-              <VerseArrow
-                direction="next"
-                label={nextTarget ? formatNavLabel(nextTarget) : null}
-                disabled={!nextTarget}
-                onClick={() => nextTarget && handleNavigate(nextTarget)}
-              />
               <div className="min-w-0 flex-1">
-                {effectiveTranslation.hasStrongs ? (
+                {renderAsInterlinear ? (
                   <Interlinear
                     verse={currentVerse}
                     studies={studies}
@@ -893,7 +962,7 @@ function VerseArrow({
       title={title}
       aria-label={isPrev ? "Previous verse" : "Next verse"}
       className={cn(
-        "flex shrink-0 items-center justify-center self-stretch rounded-md border border-[var(--color-rule)] bg-white px-2 text-[var(--color-ink-2)] transition-colors",
+        "flex h-7 shrink-0 items-center justify-center rounded-md border border-[var(--color-rule)] bg-white px-2 text-[var(--color-ink-2)] transition-colors",
         disabled
           ? "cursor-not-allowed opacity-30"
           : "hover:border-[var(--color-ink-2)]/50 hover:bg-black/5 hover:text-[var(--color-ink)]",
@@ -916,6 +985,100 @@ function VerseArrow({
         )}
       </svg>
     </button>
+  );
+}
+
+// ─── Context-window input ─────────────────────────────────────────────────
+// Lets the reader show N verses before & after the active verse in smaller
+// type so the interlinear sits in its passage context. Renders as a tiny
+// inline number input that steps 0..CONTEXT_MAX.
+
+function ContextCountInput({
+  value,
+  max,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  onChange(next: number): void;
+}) {
+  const [draft, setDraft] = useState<string>(String(value));
+  // Keep the local draft string in sync when the committed value changes
+  // from elsewhere (e.g. localStorage hydration, +/- buttons).
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const n = Number.parseInt(raw, 10);
+    onChange(Number.isFinite(n) ? n : 0);
+  };
+
+  return (
+    <span
+      className="ml-1 inline-flex shrink-0 items-center gap-1 text-[10px] uppercase tracking-widest text-[var(--color-ink-2)]"
+      title="Show this many verses before the active verse"
+    >
+      <span>−</span>
+      <input
+        type="number"
+        min={0}
+        max={max}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit((e.currentTarget as HTMLInputElement).value);
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        aria-label="Verses of context to show before the active verse"
+        className="h-4 w-9 rounded border border-[var(--color-rule)] bg-white px-1 text-center font-mono text-[10px] tabular-nums text-[var(--color-ink)] focus:border-[var(--color-ink-2)]/60 focus:outline-none"
+      />
+      <span className="normal-case tracking-normal text-[10px] italic text-[var(--color-ink-2)]/70">
+        before
+      </span>
+    </span>
+  );
+}
+
+// ─── Smaller-font context verses ──────────────────────────────────────────
+// Rendered above/below the active verse. Each line is clickable to make
+// that verse the active one (which naturally triggers the interlinear and
+// the study timer to move with the reader's attention).
+
+function ContextVerses({
+  verses,
+  dir,
+  onJump,
+}: {
+  verses: ParsedVerse[];
+  dir: "ltr" | "rtl";
+  onJump(verse: number): void;
+}) {
+  return (
+    <ul
+      dir={dir}
+      className="my-1 flex flex-col gap-0.5 font-serif text-[13px] leading-snug text-[var(--color-ink-2)]"
+    >
+      {verses.map((v) => (
+        <li key={v.verse}>
+          <button
+            type="button"
+            onClick={() => onJump(v.verse)}
+            className="w-full rounded px-1 text-left hover:bg-black/5 hover:text-[var(--color-ink)]"
+            title={`Jump to verse ${v.verse}`}
+          >
+            <sup className="mr-1 font-mono text-[9px] tracking-wide text-[var(--color-ink-2)]/70">
+              {v.verse}
+            </sup>
+            {v.plain}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -1184,11 +1347,22 @@ function PlainVerse({
     <p
       dir={dir}
       className={cn(
-        "font-serif text-[19px] leading-relaxed text-[var(--color-ink)]",
-        original && dir === "rtl" && "text-[22px] leading-loose",
-        original && dir === "ltr" && "text-[20px]",
+        // Match ContextVerses' size/leading so the active verse reads as part
+        // of the same column; bolding (rather than a larger type size) is
+        // what signals which verse is "current". The `px-1` matches the
+        // inner padding on ContextVerses' buttons so verse numbers and
+        // body text line up across the stacked verses.
+        "font-serif text-[13px] font-bold leading-snug text-[var(--color-ink)] px-1",
+        // Original-language scripts (Hebrew with pointing, polytonic Greek)
+        // genuinely need more pixels to stay legible, so keep a modest bump
+        // when the text IS the original.
+        original && dir === "rtl" && "text-[16px] leading-normal",
+        original && dir === "ltr" && "text-[15px]",
       )}
     >
+      <sup className="mr-1 font-mono text-[9px] font-normal tracking-wide text-[var(--color-ink-2)]/80">
+        {verse.verse}
+      </sup>
       {verse.plain}
     </p>
   );
@@ -1306,6 +1480,15 @@ function Interlinear({
       onPointerCancel={endDrag}
       onPointerLeave={endDrag}
     >
+      {/* Verse-number badge — mirrors the <sup>N</sup> prefix shown on the
+          leading context verses so the active verse is unambiguously labeled
+          at the same anchor point. */}
+      <span
+        aria-hidden
+        className="shrink-0 self-start pt-1 font-mono text-[11px] tracking-wide text-[var(--color-ink-2)]/80"
+      >
+        {verse.verse}
+      </span>
       {verse.tokens.map((tok, i) => {
         const study = tok.strong ? studies[tok.strong] : null;
         const active = !!tok.strong && tok.strong === activeStrong;

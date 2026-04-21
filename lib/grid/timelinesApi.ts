@@ -276,7 +276,6 @@ export function useTimelines(userId: string): TimelinesApi {
       // Surface the failure so an e.g. missing-column or RLS error doesn't
       // silently manifest as "the UI snaps back to the old value" (which is
       // what the optimistic rollback would otherwise look like to the user).
-      // eslint-disable-next-line no-console
       console.error("[timelines] update failed:", err);
     },
   });
@@ -300,7 +299,6 @@ export function useTimelines(userId: string): TimelinesApi {
     },
     onError: (err, _id, ctx) => {
       if (ctx) queryClient.setQueryData(queryKey, ctx.previous);
-      // eslint-disable-next-line no-console
       console.error("[timelines] delete failed:", err);
     },
   });

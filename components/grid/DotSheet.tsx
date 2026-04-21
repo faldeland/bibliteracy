@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import type { Dot, DotVisibility, LogosTag } from "@/lib/grid/types";
+import type { Dot } from "@/lib/grid/types";
 import type { DotUpdate } from "@/lib/grid/dotsApi";
-import { formatRef, parseRefs } from "@/lib/bible/parseRef";
-import { formatLocalTime, isoToLocalInput, localInputToISO } from "@/lib/grid/time";
+import { formatRef } from "@/lib/bible/parseRef";
+import { formatLocalTime } from "@/lib/grid/time";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 import { RoomEmbed } from "@/components/live/RoomEmbed";
-import { TagsInput } from "./TagsInput";
+import { DotEditor } from "./DotEditor";
+import { FloatingDotEditor } from "./FloatingDotEditor";
 
 interface DotSheetProps {
   dot: Dot | null;
@@ -33,21 +34,58 @@ export function DotSheet({
   onDelete,
 }: DotSheetProps) {
   const open = !!dot;
+  // When `detached` is true, the editor is floating in its own popup and the
+  // side-panel shell hides (slides off-screen) so the user can see the grid
+  // underneath. Detach state lives here (not in DotDetail) so it survives
+  // switching between sibling dots inside the popup.
+  const [detached, setDetached] = useState(false);
+  // Clear detach state when the sheet closes entirely (no active dot).
+  useEffect(() => {
+    if (!open) setDetached(false);
+  }, [open]);
+
+  // Dismiss on Escape. Without a backdrop to click, Escape becomes the
+  // primary "close" gesture for keyboard users. We intentionally DO NOT
+  // trap focus or render a modal overlay so the rest of the app — the
+  // timeline grid, search bar, version picker, book strip — stays fully
+  // interactive while the user edits a dot.
+  useEffect(() => {
+    if (!open) return;
+    // Let the popup own the Escape key when it's mounted; otherwise two
+    // listeners would both fire and close the whole sheet unexpectedly.
+    if (detached) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, detached, onClose]);
+
+  const hidden = !open || detached;
+
   return (
     <>
-      <div
-        className={cn(
-          "fixed inset-0 z-40 bg-black/20 transition-opacity",
-          open ? "opacity-100" : "pointer-events-none opacity-0",
-        )}
-        onClick={onClose}
-      />
       <aside
+        // Non-modal: no backdrop, so pointer events on the rest of the page
+        // keep flowing through. When the sheet is closed or detached it
+        // slides off-screen and its pointer events are disabled so it can't
+        // intercept clicks.
         className={cn(
-          "fixed right-0 top-0 z-50 h-full w-full max-w-md bg-[var(--color-paper)] shadow-2xl transition-transform",
-          open ? "translate-x-0" : "translate-x-full",
+          "fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-[var(--color-rule)] bg-[var(--color-paper)] shadow-2xl transition-transform",
+          hidden ? "pointer-events-none translate-x-full" : "translate-x-0",
         )}
-        aria-hidden={!open}
+        aria-hidden={hidden}
+        aria-label="Dot details"
       >
         {dot && (
           <DotDetail
@@ -59,9 +97,35 @@ export function DotSheet({
             onClose={onClose}
             onUpdate={onUpdate}
             onDelete={onDelete}
+            onDetach={onUpdate ? () => setDetached(true) : undefined}
           />
         )}
       </aside>
+      {dot && detached && onUpdate && (
+        <FloatingDotEditor
+          dot={dot}
+          onClose={() => setDetached(false)}
+          onReattach={() => setDetached(false)}
+          onSave={(patch) => {
+            onUpdate(dot.id, patch);
+            setDetached(false);
+          }}
+          onDelete={
+            onDelete
+              ? () => {
+                  if (
+                    typeof window !== "undefined" &&
+                    !window.confirm("Delete this dot? This can't be undone.")
+                  ) {
+                    return;
+                  }
+                  onDelete(dot.id);
+                  setDetached(false);
+                }
+              : undefined
+          }
+        />
+      )}
     </>
   );
 }
@@ -73,6 +137,7 @@ function DotDetail({
   onClose,
   onUpdate,
   onDelete,
+  onDetach,
 }: {
   dot: Dot;
   siblings: Dot[];
@@ -80,6 +145,7 @@ function DotDetail({
   onClose(): void;
   onUpdate?(id: string, patch: DotUpdate): void;
   onDelete?(id: string): void;
+  onDetach?(): void;
 }) {
   const [editing, setEditing] = useState(false);
   const canEdit = !!onUpdate;
@@ -131,6 +197,16 @@ function DotDetail({
               className="rounded-full px-3 py-1 text-sm text-[var(--color-ink-2)] hover:bg-black/5"
             >
               Edit
+            </button>
+          )}
+          {canEdit && editing && onDetach && (
+            <button
+              type="button"
+              onClick={onDetach}
+              title="Pop out into a floating editor"
+              className="rounded-full px-3 py-1 text-sm text-[var(--color-ink-2)] hover:bg-black/5"
+            >
+              Detach
             </button>
           )}
           <button
@@ -302,217 +378,6 @@ function DotReadView({ dot }: { dot: Dot }) {
 
       {dot.kind === "discipleship" && <DiscipleshipLiveBlock dot={dot} />}
     </div>
-  );
-}
-
-function DotEditor({
-  dot,
-  onCancel,
-  onSave,
-  onDelete,
-}: {
-  dot: Dot;
-  onCancel(): void;
-  onSave(patch: DotUpdate): void;
-  onDelete?(): void;
-}) {
-  const [title, setTitle] = useState(dot.title ?? "");
-  const [body, setBody] = useState(dot.bodyMd ?? "");
-  const [refsText, setRefsText] = useState(
-    dot.refs.map((r) => formatRef(r)).join("; "),
-  );
-  const [tags, setTags] = useState<string[]>(dot.tags ?? []);
-  const [logosTag, setLogosTag] = useState<LogosTag>(dot.logosTag ?? "logos");
-  const [visibility, setVisibility] = useState<DotVisibility>(dot.visibility);
-  const [occurredOn, setOccurredOn] = useState(dot.occurredOn);
-  // `createdAt` is the exact moment the dot was born. We expose it as
-  // <input type="datetime-local"> which speaks local wall time, so the round
-  // trip here converts ISO(UTC) → local and back.
-  const [createdAtLocal, setCreatedAtLocal] = useState(() =>
-    isoToLocalInput(dot.createdAt),
-  );
-
-  // If the underlying dot id changes, the parent re-mounts via key={dot.id}.
-  // This effect just guards against weird in-place identity changes.
-  useEffect(() => {
-    setTitle(dot.title ?? "");
-    setBody(dot.bodyMd ?? "");
-    setRefsText(dot.refs.map((r) => formatRef(r)).join("; "));
-    setTags(dot.tags ?? []);
-    setLogosTag(dot.logosTag ?? "logos");
-    setVisibility(dot.visibility);
-    setOccurredOn(dot.occurredOn);
-    setCreatedAtLocal(isoToLocalInput(dot.createdAt));
-  }, [dot]);
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const patch: DotUpdate = {
-      title: title.trim() || undefined,
-      bodyMd: body.trim() || undefined,
-      refs: parseRefs(refsText),
-      tags,
-      visibility,
-      occurredOn,
-    };
-    if (dot.kind === "logos") {
-      patch.logosTag = logosTag;
-    }
-    // Only include createdAt in the patch if the user actually changed it,
-    // so unrelated edits don't drift the server timestamp by ±1 minute due
-    // to datetime-local rounding to the minute.
-    const originalLocal = isoToLocalInput(dot.createdAt);
-    if (createdAtLocal && createdAtLocal !== originalLocal) {
-      patch.createdAt = localInputToISO(createdAtLocal);
-    }
-    onSave(patch);
-  }
-
-  return (
-    <form
-      onSubmit={handleSubmit}
-      className="flex flex-1 flex-col overflow-y-auto px-5 py-4"
-    >
-      <div className="mb-3 grid grid-cols-2 gap-3">
-        <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-            Date
-          </label>
-          <input
-            type="date"
-            value={occurredOn}
-            onChange={(e) => setOccurredOn(e.target.value)}
-            className="w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-            Time created
-          </label>
-          <input
-            type="datetime-local"
-            value={createdAtLocal}
-            onChange={(e) => setCreatedAtLocal(e.target.value)}
-            className="w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
-          />
-        </div>
-      </div>
-
-      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        Title
-      </label>
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Title"
-        className="mb-3 w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 font-serif text-lg outline-none focus:border-[var(--color-ink-2)]"
-      />
-
-      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        Notes
-      </label>
-      <textarea
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        placeholder="Notes (markdown)"
-        rows={6}
-        className="mb-3 w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
-      />
-
-      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        References
-      </label>
-      <input
-        value={refsText}
-        onChange={(e) => setRefsText(e.target.value)}
-        placeholder="John 3:16-17; Psa 23"
-        className="mb-3 w-full rounded-lg border border-[var(--color-rule)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--color-ink-2)]"
-      />
-
-      <label className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        Tags
-      </label>
-      <div className="mb-3">
-        <TagsInput tags={tags} onChange={setTags} />
-      </div>
-
-      {dot.kind === "logos" && (
-        <div className="mb-3">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-            Logos tag
-          </div>
-          <div className="flex gap-2">
-            {(["logos", "rhema", "both"] as LogosTag[]).map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setLogosTag(t)}
-                className={cn(
-                  "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-widest",
-                  logosTag === t
-                    ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-paper)]"
-                    : "border-[var(--color-rule)] text-[var(--color-ink-2)] hover:bg-black/5",
-                )}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="mb-4">
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-          Visibility
-        </div>
-        <div className="flex gap-2">
-          {(["private", "guests", "public"] as DotVisibility[]).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setVisibility(v)}
-              className={cn(
-                "rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-widest",
-                visibility === v
-                  ? "border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-paper)]"
-                  : "border-[var(--color-rule)] text-[var(--color-ink-2)] hover:bg-black/5",
-              )}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="mt-auto flex items-center justify-between gap-2 border-t border-[var(--color-rule)] pt-4">
-        <div>
-          {onDelete && (
-            <button
-              type="button"
-              onClick={onDelete}
-              className="rounded-md px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
-            >
-              Delete
-            </button>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md px-3 py-2 text-sm text-[var(--color-ink-2)] hover:bg-black/5"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            className="rounded-lg bg-[var(--color-ink)] px-4 py-2 text-sm font-semibold text-[var(--color-paper)] hover:opacity-90"
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </form>
   );
 }
 
