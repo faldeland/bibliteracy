@@ -48,11 +48,21 @@ export async function updateSession(request: NextRequest) {
     },
   });
 
+  // If an auth code lands on the root (Supabase Site URL fallback), forward it
+  // to /auth/callback so the code exchange still completes.
+  const { pathname, searchParams } = request.nextUrl;
+  const code = searchParams.get("code");
+  if (pathname === "/" && code) {
+    const url = request.nextUrl.clone();
+    url.pathname = "/auth/callback";
+    return NextResponse.redirect(url);
+  }
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { pathname, search } = request.nextUrl;
+  const search = request.nextUrl.search;
   if (!user && isProtectedPath(pathname)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
