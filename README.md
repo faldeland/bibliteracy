@@ -38,6 +38,35 @@ The grid requires Supabase. Set `NEXT_PUBLIC_SUPABASE_URL` and
 live behind their own account with RLS-enforced isolation. Without those
 vars the home page shows a sign-in prompt instead of the grid.
 
+### Google sign-in
+
+The login page offers "Continue with Google" alongside the email magic link.
+Both flows hit `/auth/callback`, which exchanges the OAuth/PKCE code for a
+session — no extra app code is needed to enable Google.
+
+To turn it on for a deployment:
+
+1. **Google Cloud Console** → APIs & Services → Credentials → "Create OAuth
+   client ID" (type: Web application). Add this authorized redirect URI:
+   `https://<your-project-ref>.supabase.co/auth/v1/callback`.
+2. **Supabase Dashboard** → Authentication → Providers → Google → paste the
+   client ID + secret and enable the provider.
+3. **Supabase Dashboard** → Authentication → URL Configuration → add your
+   site URL (e.g. `https://example.com`) and add `https://example.com/auth/callback`
+   to the redirect allow-list. Add `http://localhost:3000/auth/callback`
+   too while developing.
+
+For the local Supabase stack, set these in `supabase/config.toml` (or env
+vars) before `npm run db:start`:
+
+```
+[auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"
+redirect_uri = "http://127.0.0.1:54321/auth/v1/callback"
+```
+
 ### Bible translations
 
 The reader pulls Scripture text from three kinds of providers:

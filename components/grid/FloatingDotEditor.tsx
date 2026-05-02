@@ -6,10 +6,10 @@ import type { DotUpdate } from "@/lib/grid/dotsApi";
 import { DotEditor } from "./DotEditor";
 
 const LAYOUT_STORAGE_KEY = "bibliteracy:dot-editor-popup:layout:v1";
-const DEFAULT_WIDTH = 480;
-const DEFAULT_HEIGHT = 580;
-const MIN_WIDTH = 340;
-const MIN_HEIGHT = 320;
+const DEFAULT_WIDTH = 420;
+const DEFAULT_HEIGHT = 460;
+const MIN_WIDTH = 280;
+const MIN_HEIGHT = 220;
 const PAD = 8;
 
 interface Layout {
@@ -204,25 +204,25 @@ export function FloatingDotEditor({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
-        className="flex shrink-0 cursor-grab select-none items-start justify-between gap-2 border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]/70 px-3 py-2 active:cursor-grabbing"
+        className="flex shrink-0 cursor-grab select-none items-center justify-between gap-2 border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]/70 px-2 py-0.5 active:cursor-grabbing"
         onPointerDown={onHeaderPointerDown}
         title="Drag to reposition"
       >
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-            Edit dot · {dot.kind}
-            {dot.logosTag ? ` · ${dot.logosTag}` : ""}
-          </div>
-          <div className="truncate font-serif text-[15px] leading-tight text-[var(--color-ink)]">
+          <div className="truncate font-serif text-[12px] leading-tight text-[var(--color-ink)]">
+            <span className="mr-1.5 text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--color-ink-2)]/80">
+              {dot.kind}
+              {dot.logosTag ? ` · ${dot.logosTag}` : ""}
+            </span>
             {dot.title || "Untitled"}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5">
           {onReattach && (
             <button
               type="button"
               onClick={onReattach}
-              className="rounded-full px-2 py-1 text-xs text-[var(--color-ink-2)] hover:bg-black/5"
+              className="rounded px-1.5 py-0.5 text-[10px] text-[var(--color-ink-2)] hover:bg-black/5"
               title="Return to side panel"
             >
               Reattach
@@ -231,7 +231,7 @@ export function FloatingDotEditor({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full px-2 py-1 text-base leading-none text-[var(--color-ink-2)] hover:bg-black/5"
+            className="rounded px-1.5 py-0.5 text-[14px] leading-none text-[var(--color-ink-2)] hover:bg-black/5"
             aria-label="Close"
           >
             ×
@@ -248,6 +248,7 @@ export function FloatingDotEditor({
           onCancel={onClose}
           onSave={onSave}
           onDelete={onDelete}
+          compact
         />
       </div>
 

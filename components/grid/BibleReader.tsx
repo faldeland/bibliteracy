@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { BIBLE_BOOKS } from "@/lib/bible/books";
+import { verseCount } from "@/lib/bible/versesPerChapter";
 import { fetchChapterFromApi } from "@/lib/bible/chapterApiClient";
 import {
   DEFAULT_TRANSLATION_ID,
@@ -399,16 +400,23 @@ export function BibleReader() {
   // Flow rules: step through verses within a chapter, then across chapters
   // within a book, then across books along the canonical `order` field
   // (which mirrors the BooksLane — TaNaK for OT, traditional NT ordering
-  // after Malachi). When we cross a chapter boundary backwards we don't
-  // know the previous chapter's verse count until it loads, so we ask for
-  // verse 999 and let the chapter-load effect auto-clamp to the last
-  // verse actually present in the fetched chapter.
+  // after Malachi). When we cross a chapter boundary backwards we resolve
+  // the previous chapter's last verse from the static KJV verses-per-
+  // chapter table so the UI can render the final verse number immediately
+  // instead of flashing a placeholder "999" while the chapter fetches.
+  // If the user's current translation happens to have fewer verses than
+  // KJV for that chapter, the chapter-load effect below still clamps
+  // `verse` down to the actual count once the data arrives.
   const prevTarget = useMemo<BibleNavTarget | null>(() => {
     if (verse > 1) return { bookId, chapter, verse: verse - 1 };
-    if (chapter > 1) return { bookId, chapter: chapter - 1, verse: 999 };
+    if (chapter > 1) {
+      const last = verseCount(bookId, chapter - 1) ?? 999;
+      return { bookId, chapter: chapter - 1, verse: last };
+    }
     const prevBook = BIBLE_BOOKS.find((b) => b.order === book.order - 1);
     if (prevBook) {
-      return { bookId: prevBook.id, chapter: prevBook.chapters, verse: 999 };
+      const last = verseCount(prevBook.id, prevBook.chapters) ?? 999;
+      return { bookId: prevBook.id, chapter: prevBook.chapters, verse: last };
     }
     return null;
   }, [bookId, book, chapter, verse]);
