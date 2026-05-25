@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from "zustand";
+import { DEFAULT_TRANSLATION_ID } from "@/lib/bible/translations";
 import { addDays, today, ZOOM_PX_PER_DAY, type ZoomLevel } from "./time";
 import type { BibleRef } from "./types";
 
@@ -21,6 +22,25 @@ export interface GridState {
    * the dot with whatever passage they're reading.
    */
   currentBibleRef: BibleRef | null;
+  /**
+   * Strong's number hovered or open in a word-study popover in BibleReader.
+   * Drives the FOUND band above BooksLane. Ephemeral — see `pinnedStrong`.
+   */
+  highlightStrong: string | null;
+  /**
+   * Strong's number locked while studying (survives verse navigation, e.g.
+   * clicking occurrence dots in the FOUND band).
+   */
+  pinnedStrong: string | null;
+  /** Translation selected in BibleReader (synced from localStorage). */
+  bibleTranslationId: string;
+  /**
+   * Monotonic counter bumped by `navigateBible` so BibleReader can react to
+   * navigation requests from sibling UI (e.g. FOUND band dots).
+   */
+  bibleNavigationSeq: number;
+  /** Target for the latest `navigateBible` call. */
+  bibleNavigationTarget: BibleRef | null;
 
   setPxPerDay(px: number): void;
   setCenterDate(d: Date): void;
@@ -35,6 +55,11 @@ export interface GridState {
   recenterOnToday(): void;
   setSelectedBookId(id: string | null): void;
   setCurrentBibleRef(ref: BibleRef | null): void;
+  setHighlightStrong(strong: string | null): void;
+  setPinnedStrong(strong: string | null): void;
+  setBibleTranslationId(id: string): void;
+  /** Jump BibleReader to a passage (from grid chrome outside the reader). */
+  navigateBible(ref: BibleRef): void;
 }
 
 export const MIN_PX_PER_DAY = 0.6;
@@ -45,6 +70,11 @@ export const useGridStore = create<GridState>((set, get) => ({
   centerDate: today(),
   selectedBookId: null,
   currentBibleRef: null,
+  highlightStrong: null,
+  pinnedStrong: null,
+  bibleTranslationId: DEFAULT_TRANSLATION_ID,
+  bibleNavigationSeq: 0,
+  bibleNavigationTarget: null,
 
   setPxPerDay(px) {
     set({ pxPerDay: clamp(px, MIN_PX_PER_DAY, MAX_PX_PER_DAY) });
@@ -94,6 +124,25 @@ export const useGridStore = create<GridState>((set, get) => ({
 
   setCurrentBibleRef(ref) {
     set({ currentBibleRef: ref });
+  },
+
+  setHighlightStrong(strong) {
+    set({ highlightStrong: strong });
+  },
+
+  setPinnedStrong(strong) {
+    set({ pinnedStrong: strong });
+  },
+
+  setBibleTranslationId(id) {
+    set({ bibleTranslationId: id });
+  },
+
+  navigateBible(ref) {
+    set((s) => ({
+      bibleNavigationTarget: ref,
+      bibleNavigationSeq: s.bibleNavigationSeq + 1,
+    }));
   },
 }));
 

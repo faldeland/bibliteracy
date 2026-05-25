@@ -19,22 +19,28 @@ import {
   translationCovers,
   translationsFor,
 } from "@/lib/bible/translations";
+import { readLastView, writeLastView } from "@/lib/bible/lastView";
+import { XREF_CATEGORY_LABEL } from "@/lib/bible/xrefCategories";
 import { matchTrustedWork } from "@/lib/llm/trustedSources";
 import { useGridStore } from "@/lib/grid/state";
 import {
   endSession as endVerseSession,
-  formatDuration,
-  getAllVerseStats,
   startSession as startVerseSession,
-  subscribe as subscribeVerseSessions,
-  verseKey,
-  type TrackerSnapshot,
-  type VerseStats,
 } from "@/lib/study/verseSessions";
 import { BibleSearchBar, type BibleNavTarget } from "./BibleSearchBar";
 import { BibleVersionPicker } from "./BibleVersionPicker";
 import { WordDeepDiveDrawer } from "./WordDeepDiveDrawer";
 import { useBibleHeaderSlotTarget } from "./bibleHeaderSlot";
+import { BibleReaderResizeHandle } from "./BibleReaderResizeHandle";
+import { StrongResizeHandle } from "./StrongResizeHandle";
+import {
+  BIBLE_READER_CONTEXT_MAX_HEIGHT_PX,
+  BIBLE_READER_KJV_LABEL_PX,
+  BIBLE_READER_META_HEIGHT_PX,
+  fixedHeightStyle,
+  kjvInterlinearHeightPx,
+} from "@/lib/grid/bibleReaderLayout";
+import { useBibleReaderPanelHeights } from "@/lib/grid/useBibleReaderPanelHeights";
 import { cn } from "@/lib/utils";
 
 // ─── Types matching the /api/bible/* responses ────────────────────────────
@@ -101,32 +107,42 @@ interface UsageResponse {
   configured?: boolean;
   error?: string;
 }
-interface XRefResponse {
-  query?: { book: string; chapter: number; verseStart?: number };
-  label?: string;
+interface StrongsOccurrenceVerse {
+  book: string;
+  chapter: number;
+  verse: number;
+  label: string;
+}
+interface StrongsResponse {
+  strong: string;
   count: number;
-  results: Array<{
-    to: { book: string; chapter: number; verseStart?: number; verseEnd?: number };
-    toLabel: string;
-    category:
-      | "ot-in-nt"
-      | "synoptic-parallel"
-      | "thematic-chain"
-      | "messianic"
-      | "narrative-parallel";
-    note: string;
-  }>;
+  verses: StrongsOccurrenceVerse[];
   error?: string;
 }
-
-const CATEGORY_LABEL: Record<string, string> = {
-  "ot-in-nt": "OT in NT",
-  "synoptic-parallel": "Synoptic parallel",
-  "thematic-chain": "Thematic chain",
-  messianic: "Messianic",
-  "narrative-parallel": "Narrative parallel",
-};
-
+interface StrongsXRefRow {
+  to: {
+    book: string;
+    chapter: number;
+    verseStart?: number;
+    verseEnd?: number;
+  };
+  toLabel: string;
+  category:
+    | "ot-in-nt"
+    | "synoptic-parallel"
+    | "thematic-chain"
+    | "messianic"
+    | "narrative-parallel";
+  note: string;
+  fromVerse: { book: string; chapter: number; verse: number };
+  fromVerseLabel: string;
+}
+interface StrongsXRefsResponse {
+  strong: string;
+  count: number;
+  xrefs: StrongsXRefRow[];
+  error?: string;
+}
 // ─── Defaults ─────────────────────────────────────────────────────────────
 
 const DEFAULT_BOOK = "Jhn";
@@ -143,9 +159,26 @@ const CONTEXT_MAX = 20;
 // ─── Component ────────────────────────────────────────────────────────────
 
 export function BibleReader() {
+  const setCurrentBibleRef = useGridStore((s) => s.setCurrentBibleRef);
   const [bookId, setBookId] = useState<string>(DEFAULT_BOOK);
   const [chapter, setChapter] = useState<number>(DEFAULT_CHAPTER);
   const [verse, setVerse] = useState<number>(DEFAULT_VERSE);
+  // Defer persisting until we've hydrated from localStorage so we don't
+  // overwrite a saved position with the John 3:16 default on first mount.
+  const [positionReady, setPositionReady] = useState(false);
+  useEffect(() => {
+    const stored = readLastView();
+    if (stored) {
+      setBookId(stored.bookId);
+      setChapter(stored.chapter);
+      setVerse(stored.verse);
+    }
+    setPositionReady(true);
+  }, []);
+  useEffect(() => {
+    if (!positionReady) return;
+    writeLastView({ bookId, chapter, verse });
+  }, [bookId, chapter, verse, positionReady]);
 
   const book = useMemo(
     () => BIBLE_BOOKS.find((b) => b.id === bookId) ?? BIBLE_BOOKS[0],
@@ -154,11 +187,9 @@ export function BibleReader() {
 
   // ── Translation (persisted in localStorage) ────────────────────────────
   // The picker exposes every translation served by bolls.life (see
-  // lib/bible/translations.ts). The per-word interlinear is reserved for
-  // the original-language texts (Hebrew Tanakh, Greek NT); every English
-  // translation — KJV and ASV included — renders as a plain paragraph.
-  // Strong's-tagged English translations still power the word-study
-  // popover through the KJV parallel strip underneath.
+  // lib/bible/translations.ts). Original-language texts and KJV render as
+  // a Strong's interlinear; every other English translation renders as a
+  // plain paragraph with a KJV Strong's row underneath for word study.
   // When the user navigates to a book in a testament the current translation
   // doesn't cover (e.g. WLCa is OT-only and they jump to John), we
   // transparently swap to the default for that session without overwriting
@@ -166,6 +197,7 @@ export function BibleReader() {
   const [translationId, setTranslationId] = useState<string>(
     DEFAULT_TRANSLATION_ID,
   );
+  const setBibleTranslationId = useGridStore((s) => s.setBibleTranslationId);
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(TRANSLATION_STORAGE_KEY);
@@ -176,12 +208,16 @@ export function BibleReader() {
   }, []);
   const handleTranslationChange = useCallback((id: string) => {
     setTranslationId(id);
+    setBibleTranslationId(id);
     try {
       window.localStorage.setItem(TRANSLATION_STORAGE_KEY, id);
     } catch {
       // ignore
     }
-  }, []);
+  }, [setBibleTranslationId]);
+  useEffect(() => {
+    setBibleTranslationId(translationId);
+  }, [translationId, setBibleTranslationId]);
   const preferredTranslation = useMemo(
     () => getTranslation(translationId),
     [translationId],
@@ -276,6 +312,11 @@ export function BibleReader() {
     setBookId(target.bookId);
     setChapter(target.chapter);
     setVerse(target.verse);
+    setCurrentBibleRef({
+      book: target.bookId,
+      chapter: target.chapter,
+      verseStart: target.verse,
+    });
     setRecents((prev) => {
       const filtered = prev.filter(
         (r) =>
@@ -293,7 +334,7 @@ export function BibleReader() {
       }
       return next;
     });
-  }, []);
+  }, [setCurrentBibleRef]);
 
   // ── Chapter load ───────────────────────────────────────────────────────
 
@@ -314,7 +355,6 @@ export function BibleReader() {
     setChapterError(null);
     setChapterConfigMissing(null);
     setChapterAttribution(null);
-    setChapterData(null);
     fetchChapterFromApi(
       bookId,
       chapter,
@@ -450,11 +490,21 @@ export function BibleReader() {
   // Publish the active verse into shared grid state so the new-dot composer
   // can pre-populate a reference tag without having to thread props through
   // the BooksLane / Lane / Toolbar trees.
-  const setCurrentBibleRef = useGridStore((s) => s.setCurrentBibleRef);
+  const bibleNavigationSeq = useGridStore((s) => s.bibleNavigationSeq);
+  const bibleNavigationTarget = useGridStore((s) => s.bibleNavigationTarget);
   useEffect(() => {
     setCurrentBibleRef({ book: bookId, chapter, verseStart: verse });
     return () => setCurrentBibleRef(null);
   }, [bookId, chapter, verse, setCurrentBibleRef]);
+
+  useEffect(() => {
+    if (!bibleNavigationTarget || bibleNavigationSeq === 0) return;
+    handleNavigate({
+      bookId: bibleNavigationTarget.book,
+      chapter: bibleNavigationTarget.chapter,
+      verse: bibleNavigationTarget.verseStart ?? 1,
+    });
+  }, [bibleNavigationSeq, bibleNavigationTarget, handleNavigate]);
 
   // ← / → anywhere on the page moves between verses, unless focus is in a
   // text field (so typing in the search bar still moves the caret).
@@ -475,20 +525,18 @@ export function BibleReader() {
   }, [prevTarget, nextTarget, handleNavigate]);
 
   // ── Interlinear / parallel policy ─────────────────────────────────────
-  // Only the original-language Hebrew / Greek texts render their primary
-  // verse as an interlinear — every English translation (even the ones
-  // that carry Strong's tags, like KJV and ASV) renders as a plain
-  // paragraph so the verse display is consistent across versions.
+  // Original-language texts (Hebrew / Greek) and KJV render their primary
+  // verse as a Strong's interlinear. Every other English translation
+  // renders as a plain paragraph with a KJV Strong's row underneath.
   const renderAsInterlinear =
-    effectiveTranslation.hasStrongs && effectiveTranslation.original;
-  // We always want a Strong's-tagged interlinear visible somewhere on the
-  // page. When the primary verse isn't itself an interlinear, fetch KJV
-  // for the same chapter and render its matching verse as a second row
-  // with the full word-study UI underneath. Skipped when KJV is already
-  // the selected translation (a plain KJV + its own parallel would be
-  // redundant).
+    effectiveTranslation.hasStrongs &&
+    (effectiveTranslation.original || effectiveTranslation.id === "KJV");
+  // Always show the KJV Strong's interlinear below the selected translation
+  // unless the primary row is already KJV interlinear. Original-language
+  // texts keep their Hebrew/Greek interlinear on top and still get the
+  // English KJV Strong's row underneath for word study.
   const showKjvParallel =
-    !renderAsInterlinear && effectiveTranslation.id !== "KJV";
+    !renderAsInterlinear || effectiveTranslation.original;
   const [kjvVerses, setKjvVerses] = useState<ParsedVerse[] | null>(null);
   useEffect(() => {
     if (!showKjvParallel) {
@@ -576,17 +624,59 @@ export function BibleReader() {
     };
   }, [studyVerse]);
 
-  // ── Popover state ─────────────────────────────────────────────────────
+  // ── Strong's highlight + popover ──────────────────────────────────────
+  // Hover drives FOUND / token styling only. Click opens the word-study
+  // popover. Leaving a token (without entering another) locks the highlight.
 
+  const [hoveredStrong, setHoveredStrong] = useState<string | null>(null);
+  const pinnedStrong = useGridStore((s) => s.pinnedStrong);
+  const setPinnedStrong = useGridStore((s) => s.setPinnedStrong);
   const [popover, setPopover] = useState<{
     strong: string;
     rect: DOMRect;
-    pinned: boolean;
   } | null>(null);
 
-  // Close pinned popover when user clicks outside it.
+  const highlightStrong =
+    hoveredStrong ?? popover?.strong ?? pinnedStrong ?? null;
+
+  const tokenLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTokenLeaveTimer = useCallback(() => {
+    if (tokenLeaveTimer.current) {
+      clearTimeout(tokenLeaveTimer.current);
+      tokenLeaveTimer.current = null;
+    }
+  }, []);
+
+  const onTokenEnter = useCallback(
+    (strong: string) => {
+      clearTokenLeaveTimer();
+      setHoveredStrong(strong);
+      setPinnedStrong(null);
+    },
+    [clearTokenLeaveTimer, setPinnedStrong],
+  );
+  const onTokenLeave = useCallback(() => {
+    clearTokenLeaveTimer();
+    tokenLeaveTimer.current = setTimeout(() => {
+      setHoveredStrong((cur) => {
+        if (cur) setPinnedStrong(cur);
+        return null;
+      });
+    }, 160);
+  }, [clearTokenLeaveTimer, setPinnedStrong]);
+  const onTokenClick = useCallback(
+    (strong: string, el: HTMLElement) => {
+      clearTokenLeaveTimer();
+      setHoveredStrong(null);
+      setPinnedStrong(strong);
+      setPopover({ strong, rect: el.getBoundingClientRect() });
+    },
+    [clearTokenLeaveTimer, setPinnedStrong],
+  );
+
+  // Close popover when user clicks outside it (highlight stays locked).
   useEffect(() => {
-    if (!popover?.pinned) return;
+    if (!popover) return;
     const onDoc = (e: MouseEvent) => {
       const t = e.target as HTMLElement;
       if (t.closest("[data-bible-popover]")) return;
@@ -595,20 +685,18 @@ export function BibleReader() {
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [popover?.pinned]);
+  }, [popover]);
 
-  const onTokenEnter = useCallback((strong: string, el: HTMLElement) => {
-    setPopover((cur) => {
-      if (cur?.pinned) return cur;
-      return { strong, rect: el.getBoundingClientRect(), pinned: false };
-    });
-  }, []);
-  const onTokenLeave = useCallback(() => {
-    setPopover((cur) => (cur?.pinned ? cur : null));
-  }, []);
-  const onTokenClick = useCallback((strong: string, el: HTMLElement) => {
-    setPopover({ strong, rect: el.getBoundingClientRect(), pinned: true });
-  }, []);
+  const setHighlightStrong = useGridStore((s) => s.setHighlightStrong);
+  useEffect(() => {
+    setHighlightStrong(highlightStrong);
+    return () => setHighlightStrong(null);
+  }, [highlightStrong, setHighlightStrong]);
+
+  useEffect(() => {
+    setHoveredStrong(null);
+    setPopover(null);
+  }, [bookId, chapter, verse]);
 
   const popoverStudy = popover ? studies[popover.strong] : null;
 
@@ -622,33 +710,15 @@ export function BibleReader() {
   }, []);
   const closeDeepDive = useCallback(() => setDeepDiveStrong(null), []);
 
-  // ── Cross-references for the current verse ────────────────────────────
-  // The dataset is small, static, and shipped with the app, so there's no
-  // server load worry; we just call the API for caching + edge-friendliness.
+  const {
+    passageHeight,
+    kjvHeight,
+    sectionHeightPx,
+    resizePassage,
+    resizeKjv,
+  } = useBibleReaderPanelHeights(showKjvParallel);
 
-  const [xrefs, setXrefs] = useState<XRefResponse["results"]>([]);
-  useEffect(() => {
-    if (!currentVerse) {
-      setXrefs([]);
-      return;
-    }
-    let aborted = false;
-    const ctl = new AbortController();
-    const url = `/api/bible/xrefs?book=${bookId}&chapter=${chapter}&verse=${currentVerse.verse}`;
-    fetch(url, { signal: ctl.signal })
-      .then(async (r) => (await r.json()) as XRefResponse)
-      .then((data) => {
-        if (aborted) return;
-        setXrefs(data.results ?? []);
-      })
-      .catch(() => {
-        if (!aborted) setXrefs([]);
-      });
-    return () => {
-      aborted = true;
-      ctl.abort();
-    };
-  }, [bookId, chapter, currentVerse]);
+  const kjvTrackHeightPx = kjvInterlinearHeightPx(kjvHeight);
 
   // ─── Render ────────────────────────────────────────────────────────────
 
@@ -722,13 +792,17 @@ export function BibleReader() {
 
   return (
     <section
-      className="border-b border-[var(--color-rule)] bg-[var(--color-paper)]"
+      className="shrink-0 border-b border-[var(--color-rule)] bg-[var(--color-paper)]"
+      style={fixedHeightStyle(sectionHeightPx)}
       aria-label="Bible reading"
     >
       {headerSlot && createPortal(headerControls, headerSlot)}
 
-      {/* Verse line */}
-      <div className="relative px-4 pt-2 pb-3">
+      <div
+        className="relative flex flex-col"
+        style={fixedHeightStyle(passageHeight)}
+      >
+        <div className="relative flex min-h-0 flex-1 flex-col px-4 pt-2 pb-3">
         {chapterError && chapterConfigMissing && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <div className="font-semibold">
@@ -751,76 +825,92 @@ export function BibleReader() {
           </div>
         )}
         {chapterLoading && !chapterError && (
-          <div className="h-16 animate-pulse rounded-md bg-[var(--color-paper-2)]/50" />
+          <div
+            className="pointer-events-none absolute inset-0 z-[1] animate-pulse rounded-md bg-[var(--color-paper-2)]/50"
+            aria-hidden
+          />
         )}
-        {!chapterLoading && !chapterError && currentVerse && (
+        {!chapterError && (
           <>
-            {/* Translation label — mirrors the KJV parallel label so every
-                rendered verse is unambiguously attributed in-line. The
-                selected verse reference sits next to it (moved out of the
-                top nav so the header stays focused on global controls), and
-                the publisher attribution rides on the same row to save
-                vertical space. */}
-            <div className="mb-1 flex items-baseline gap-3">
-              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-                {effectiveTranslation.label}
-              </span>
-              <span className="shrink-0 font-serif text-[12px] text-[var(--color-ink)]">
-                {book.name} {chapter}:{verse}
-              </span>
-              {effectiveTranslation.license === "copyrighted" && (
-                <span
-                  className="shrink-0 text-[10px] italic text-amber-700/80"
-                  title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
-                >
-                  © unlicensed
-                </span>
-              )}
-              {effectiveTranslation.license === "licensed-via-publisher-api" && (
-                <span
-                  className="shrink-0 text-[10px] italic text-emerald-700/80"
-                  title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
-                >
-                  ⚐ via {effectiveTranslation.provider.toUpperCase()}
-                </span>
-              )}
-              {renderAsInterlinear && (
-                <span className="shrink-0 text-[10px] italic text-[var(--color-ink-2)]/70">
-                  with BDB-Thayer&apos;s
-                </span>
-              )}
-              {effectiveTranslation.id !== preferredTranslation.id && (
-                <span
-                  className="shrink-0 text-[10px] italic text-[var(--color-ink-2)]/70"
-                  title={`Falling back to ${effectiveTranslation.label} — ${preferredTranslation.label} doesn't cover ${book.testament}.`}
-                >
-                  (fallback from {preferredTranslation.label})
-                </span>
-              )}
-              <ContextCountInput
-                value={contextCount}
-                max={CONTEXT_MAX}
-                onChange={handleContextCountChange}
-              />
-              {chapterAttribution && (
-                <span
-                  className="ml-auto min-w-0 truncate text-right text-[10px] font-light leading-snug text-[var(--color-ink-2)]/45"
-                  title={chapterAttribution}
-                >
-                  {chapterAttribution}
+            <div
+              className="flex items-baseline gap-3 overflow-hidden"
+              style={fixedHeightStyle(BIBLE_READER_META_HEIGHT_PX)}
+            >
+              {currentVerse ? (
+                <>
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+                    {effectiveTranslation.label}
+                  </span>
+                  <span className="shrink-0 font-serif text-[12px] text-[var(--color-ink)]">
+                    {book.name} {chapter}:{verse}
+                  </span>
+                  {effectiveTranslation.license === "copyrighted" && (
+                    <span
+                      className="shrink-0 text-[10px] italic text-amber-700/80"
+                      title="This translation is copyrighted and is being served via bolls.life without a publisher license. Verify your usage rights before public deployment."
+                    >
+                      © unlicensed
+                    </span>
+                  )}
+                  {effectiveTranslation.license ===
+                    "licensed-via-publisher-api" && (
+                    <span
+                      className="shrink-0 text-[10px] italic text-emerald-700/80"
+                      title={`Served via the official ${effectiveTranslation.provider.toUpperCase()} API.`}
+                    >
+                      ⚐ via {effectiveTranslation.provider.toUpperCase()}
+                    </span>
+                  )}
+                  {renderAsInterlinear && (
+                    <span className="shrink-0 text-[10px] italic text-[var(--color-ink-2)]/70">
+                      with BDB-Thayer&apos;s
+                    </span>
+                  )}
+                  {effectiveTranslation.id !== preferredTranslation.id && (
+                    <span
+                      className="shrink-0 text-[10px] italic text-[var(--color-ink-2)]/70"
+                      title={`Falling back to ${effectiveTranslation.label} — ${preferredTranslation.label} doesn't cover ${book.testament}.`}
+                    >
+                      (fallback from {preferredTranslation.label})
+                    </span>
+                  )}
+                  <ContextCountInput
+                    value={contextCount}
+                    max={CONTEXT_MAX}
+                    onChange={handleContextCountChange}
+                  />
+                  {chapterAttribution && (
+                    <span
+                      className="ml-auto min-w-0 truncate text-right text-[10px] font-light leading-snug text-[var(--color-ink-2)]/45"
+                      title={chapterAttribution}
+                    >
+                      {chapterAttribution}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span className="text-[11px] text-[var(--color-ink-2)]">
+                  Loading passage…
                 </span>
               )}
             </div>
-            {contextBefore.length > 0 && (
-              <ContextVerses
-                verses={contextBefore}
-                dir={effectiveTranslation.dir}
-                onJump={(v) => handleNavigate({ bookId, chapter, verse: v })}
-              />
+
+            {currentVerse && contextBefore.length > 0 && (
+              <div
+                className="shrink-0 overflow-y-auto"
+                style={{ maxHeight: BIBLE_READER_CONTEXT_MAX_HEIGHT_PX }}
+              >
+                <ContextVerses
+                  verses={contextBefore}
+                  dir={effectiveTranslation.dir}
+                  onJump={(v) => handleNavigate({ bookId, chapter, verse: v })}
+                />
+              </div>
             )}
-            <div className="flex items-stretch gap-1.5">
-              <div className="min-w-0 flex-1">
-                {renderAsInterlinear ? (
+
+            <div className="min-h-0 flex-1 overflow-hidden">
+              {currentVerse ? (
+                renderAsInterlinear ? (
                   <Interlinear
                     verse={currentVerse}
                     studies={studies}
@@ -829,7 +919,7 @@ export function BibleReader() {
                     onTokenEnter={onTokenEnter}
                     onTokenLeave={onTokenLeave}
                     onTokenClick={onTokenClick}
-                    activeStrong={popover?.strong ?? null}
+                    activeStrong={highlightStrong}
                   />
                 ) : (
                   <PlainVerse
@@ -837,83 +927,83 @@ export function BibleReader() {
                     dir={effectiveTranslation.dir}
                     original={effectiveTranslation.original}
                   />
-                )}
-              </div>
-              <VerseTimeIndicator
-                activeVerseKey={verseKey({ bookId, chapter, verse })}
-                onJump={(target) => handleNavigate(target)}
-              />
+                )
+              ) : (
+                <div
+                  className="h-full rounded bg-[var(--color-paper-2)]/40"
+                  aria-hidden
+                />
+              )}
             </div>
           </>
         )}
-        {/* KJV parallel — full Strong's interlinear shown when the user's
-            selected translation doesn't carry Strong's tags, so the word
-            study is always one row away. */}
-        {!chapterLoading &&
-          !chapterError &&
-          showKjvParallel &&
-          kjvCurrentVerse && (
-            <div className="mt-3 border-t border-[var(--color-rule)]/60 pt-2">
-              <div className="mb-1 flex items-baseline gap-2">
-                <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-                  KJV
-                </span>
-                <span className="text-[10px] italic text-[var(--color-ink-2)]/70">
-                  with BDB-Thayer&apos;s
-                </span>
-              </div>
-              <Interlinear
-                verse={kjvCurrentVerse}
-                studies={studies}
-                isHebrew={book.testament === "OT"}
-                verseDir="ltr"
-                onTokenEnter={onTokenEnter}
-                onTokenLeave={onTokenLeave}
-                onTokenClick={onTokenClick}
-                activeStrong={popover?.strong ?? null}
-              />
-            </div>
-          )}
-
-        {xrefs.length > 0 && (
-          <div className="mt-2 border-t border-[var(--color-rule)]/60 pt-2">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-              Cross-references
-            </div>
-            <ul className="flex flex-wrap gap-1.5">
-              {xrefs.map((x, i) => (
-                <li key={`${x.toLabel}-${i}`}>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleNavigate({
-                        bookId: x.to.book,
-                        chapter: x.to.chapter,
-                        verse: x.to.verseStart ?? 1,
-                      })
-                    }
-                    title={`${CATEGORY_LABEL[x.category] ?? x.category} — ${x.note}`}
-                    className="rounded-full border border-[var(--color-rule)] bg-white/70 px-2 py-0.5 text-[11px] text-[var(--color-ink)] hover:bg-black/5"
-                  >
-                    <span className="font-serif">{x.toLabel}</span>
-                    <span className="ml-1 text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]">
-                      {CATEGORY_LABEL[x.category] ?? x.category}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        </div>
+        <BibleReaderResizeHandle
+          label="Resize translation panel"
+          onResize={resizePassage}
+        />
       </div>
+
+      {showKjvParallel && !chapterError && (
+        <div
+          className="relative flex flex-col border-t border-[var(--color-rule)]/60"
+          style={fixedHeightStyle(kjvHeight)}
+        >
+          <div className="relative flex min-h-0 flex-1 flex-col px-4 pt-2 pb-3">
+            {chapterLoading && (
+              <div
+                className="pointer-events-none absolute inset-0 z-[1] animate-pulse rounded-md bg-[var(--color-paper-2)]/50"
+                aria-hidden
+              />
+            )}
+            <div
+              className="mb-1 flex shrink-0 items-baseline gap-2"
+              style={fixedHeightStyle(BIBLE_READER_KJV_LABEL_PX)}
+            >
+              <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+                KJV
+              </span>
+              <span className="text-[10px] italic text-[var(--color-ink-2)]/70">
+                with BDB-Thayer&apos;s
+              </span>
+            </div>
+            <div
+              className="min-h-0 overflow-hidden"
+              style={fixedHeightStyle(kjvTrackHeightPx)}
+            >
+              {kjvCurrentVerse ? (
+                <Interlinear
+                  verse={kjvCurrentVerse}
+                  studies={studies}
+                  isHebrew={book.testament === "OT"}
+                  verseDir="ltr"
+                  onTokenEnter={onTokenEnter}
+                  onTokenLeave={onTokenLeave}
+                  onTokenClick={onTokenClick}
+                  activeStrong={highlightStrong}
+                />
+              ) : (
+                <div
+                  className="h-full rounded bg-[var(--color-paper-2)]/40"
+                  aria-hidden
+                />
+              )}
+            </div>
+          </div>
+          <StrongResizeHandle
+            label="Resize KJV panel"
+            onResize={resizeKjv}
+          />
+        </div>
+      )}
 
       {popover && popoverStudy && (
         <WordStudyPopover
           rect={popover.rect}
           study={popoverStudy}
-          pinned={popover.pinned}
           onClose={() => setPopover(null)}
           onOpenDeepDive={openDeepDive}
+          onNavigate={handleNavigate}
         />
       )}
 
@@ -1090,255 +1180,6 @@ function ContextVerses({
   );
 }
 
-// ─── Verse study-time indicator ────────────────────────────────────────────
-// Sits next to the verse-nav arrows and shows a live "⏱ m:ss" count of
-// active study time on the current verse. Clicking it opens a popover
-// listing every verse the user has studied, sorted newest-first, with
-// totals. Clicking a row jumps to that verse.
-
-function VerseTimeIndicator({
-  activeVerseKey,
-  onJump,
-}: {
-  activeVerseKey: string;
-  onJump(target: BibleNavTarget): void;
-}) {
-  const [snap, setSnap] = useState<TrackerSnapshot>({
-    current: null,
-    totals: {},
-    isActive: false,
-    lastActivityAt: 0,
-    idleThresholdMs: 30_000,
-  });
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
-  const panelRef = useRef<HTMLDivElement | null>(null);
-
-  // Subscribe for live ticks. The tracker fires on every 1 Hz heartbeat
-  // while the user is active on a verse, plus on start/end of sessions.
-  useEffect(() => {
-    return subscribeVerseSessions((s) => setSnap(s));
-  }, []);
-
-  // Dismiss popover on outside click / Esc.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (panelRef.current?.contains(t)) return;
-      if (btnRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDoc);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDoc);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  // Live active-ms for the currently-viewed verse. Includes the in-flight
-  // session (not yet flushed) plus any prior rollup on this verse.
-  const liveMs = (() => {
-    const rolled = snap.totals[activeVerseKey]?.totalMs ?? 0;
-    const live =
-      snap.current?.verseKey === activeVerseKey ? snap.current.activeMs : 0;
-    return rolled + live;
-  })();
-
-  const hasAny = Object.keys(snap.totals).length > 0 || liveMs > 0;
-  const display = liveMs > 0 ? formatDuration(liveMs) : "0:00";
-  const sessionOnThisVerse = snap.current?.verseKey === activeVerseKey;
-  // Actively ticking right now: session on this verse + user is active.
-  const isTicking = sessionOnThisVerse && snap.isActive;
-  // Session on this verse, but the tracker has paused us on idle / hidden tab.
-  const isPaused =
-    sessionOnThisVerse && !snap.isActive && (snap.current?.activeMs ?? 0) > 0;
-
-  const idleSec = Math.max(
-    0,
-    Math.floor((Date.now() - snap.lastActivityAt) / 1000),
-  );
-  const title = !hasAny
-    ? "No study time recorded yet — click to track as you read"
-    : isTicking
-      ? "Study time on this verse — timer running. Click for history."
-      : isPaused
-        ? `Paused — no activity for ${idleSec}s. Move the mouse or press a key to resume. Click for history.`
-        : "Study time on this verse — click for history";
-
-  return (
-    <div className="relative shrink-0 self-stretch">
-      <button
-        ref={btnRef}
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title={title}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={
-          isPaused
-            ? `Study time ${display}, paused`
-            : isTicking
-              ? `Study time ${display}, running`
-              : `Study time ${display}`
-        }
-        className={cn(
-          "flex h-full items-center gap-1 rounded-md border px-1.5 text-[11px] font-medium tabular-nums transition-colors",
-          isTicking
-            ? "border-emerald-600/50 bg-emerald-50/60 text-emerald-900"
-            : isPaused
-              ? "border-amber-600/40 bg-amber-50/50 text-amber-900"
-              : "border-[var(--color-rule)] bg-white text-[var(--color-ink-2)] hover:border-[var(--color-ink-2)]/50 hover:text-[var(--color-ink)]",
-        )}
-      >
-        {isPaused ? (
-          <svg
-            viewBox="0 0 20 20"
-            fill="currentColor"
-            className="h-3.5 w-3.5"
-            aria-hidden
-          >
-            <rect x="5.5" y="4.5" width="3" height="11" rx="0.75" />
-            <rect x="11.5" y="4.5" width="3" height="11" rx="0.75" />
-          </svg>
-        ) : (
-          <svg
-            viewBox="0 0 20 20"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className={cn("h-3.5 w-3.5", isTicking && "animate-pulse")}
-            aria-hidden
-          >
-            <circle cx="10" cy="11" r="6" />
-            <path d="M10 7.5v3.5l2 1.5" />
-            <path d="M8 3h4" />
-          </svg>
-        )}
-        <span>{display}</span>
-        {isPaused && (
-          <span className="ml-0.5 text-[9px] font-semibold uppercase tracking-wider">
-            Paused
-          </span>
-        )}
-      </button>
-      {open && (
-        <VerseTimePanel
-          panelRef={panelRef}
-          activeVerseKey={activeVerseKey}
-          onJump={(t) => {
-            setOpen(false);
-            onJump(t);
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function VerseTimePanel({
-  panelRef,
-  activeVerseKey,
-  onJump,
-}: {
-  panelRef: React.RefObject<HTMLDivElement | null>;
-  activeVerseKey: string;
-  onJump(target: BibleNavTarget): void;
-}) {
-  // Re-read on every tick so the row for the live verse keeps counting
-  // up while the panel is open.
-  const [rows, setRows] = useState<VerseStats[]>(() => getAllVerseStats());
-  useEffect(() => {
-    return subscribeVerseSessions(() => setRows(getAllVerseStats()));
-  }, []);
-
-  const totalMs = rows.reduce((sum, r) => sum + r.totalMs, 0);
-
-  return (
-    <div
-      ref={panelRef}
-      role="dialog"
-      aria-label="Verse study history"
-      className="absolute right-0 top-full z-40 mt-1 w-72 rounded-lg border border-[var(--color-rule)] bg-white p-2 shadow-xl"
-    >
-      <div className="flex items-baseline justify-between border-b border-[var(--color-rule)]/60 pb-1 text-[10px] uppercase tracking-widest text-[var(--color-ink-2)]">
-        <span>Verses studied</span>
-        {totalMs > 0 && (
-          <span className="tabular-nums text-[var(--color-ink-2)]/80">
-            {formatDuration(totalMs)} total
-          </span>
-        )}
-      </div>
-      {rows.length === 0 ? (
-        <p className="px-1 py-3 text-center text-[11px] italic text-[var(--color-ink-2)]">
-          Land on a verse and the timer starts. Totals show up here.
-        </p>
-      ) : (
-        <ul className="max-h-72 overflow-y-auto py-1">
-          {rows.map((r) => {
-            const key = `${r.bookId}:${r.chapter}:${r.verse}`;
-            const book = BIBLE_BOOKS.find((b) => b.id === r.bookId);
-            const label = `${book?.abbr ?? r.bookId} ${r.chapter}:${r.verse}`;
-            const isActive = key === activeVerseKey;
-            return (
-              <li key={key}>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onJump({
-                      bookId: r.bookId,
-                      chapter: r.chapter,
-                      verse: r.verse,
-                    })
-                  }
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-[12px] hover:bg-black/5",
-                    isActive && "bg-emerald-50/60",
-                  )}
-                >
-                  <span className="flex-1 truncate font-serif text-[13px] text-[var(--color-ink)]">
-                    {label}
-                  </span>
-                  {r.sessionCount > 1 && (
-                    <span className="text-[9.5px] uppercase tracking-widest text-[var(--color-ink-2)]/70">
-                      ×{r.sessionCount}
-                    </span>
-                  )}
-                  <VerseTimeBar ms={r.totalMs} max={rows[0]?.totalMs ?? 1} />
-                  <span className="w-12 shrink-0 text-right text-[11px] tabular-nums text-[var(--color-ink-2)]">
-                    {formatDuration(r.totalMs)}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function VerseTimeBar({ ms, max }: { ms: number; max: number }) {
-  const pct = max > 0 ? Math.min(100, Math.round((ms / max) * 100)) : 0;
-  return (
-    <span
-      aria-hidden
-      className="h-1 w-10 shrink-0 overflow-hidden rounded-full bg-[var(--color-rule)]/50"
-    >
-      <span
-        className="block h-full rounded-full bg-emerald-700/70"
-        style={{ width: `${pct}%` }}
-      />
-    </span>
-  );
-}
-
 // ─── Plain verse (used when the translation has no Strong's tags) ────────
 
 function PlainVerse({
@@ -1398,7 +1239,7 @@ function Interlinear({
    * sets its own per-token `dir`).
    */
   verseDir: "ltr" | "rtl";
-  onTokenEnter(strong: string, el: HTMLElement): void;
+  onTokenEnter(strong: string): void;
   onTokenLeave(): void;
   onTokenClick(strong: string, el: HTMLElement): void;
   activeStrong: string | null;
@@ -1508,18 +1349,10 @@ function Interlinear({
             data-bible-token
             disabled={!interactive}
             onMouseEnter={
-              interactive
-                ? (e) =>
-                    onTokenEnter(tok.strong!, e.currentTarget as HTMLElement)
-                : undefined
+              interactive ? () => onTokenEnter(tok.strong!) : undefined
             }
             onMouseLeave={interactive ? onTokenLeave : undefined}
-            onFocus={
-              interactive
-                ? (e) =>
-                    onTokenEnter(tok.strong!, e.currentTarget as HTMLElement)
-                : undefined
-            }
+            onFocus={interactive ? () => onTokenEnter(tok.strong!) : undefined}
             onBlur={interactive ? onTokenLeave : undefined}
             onClick={
               interactive
@@ -1580,16 +1413,16 @@ function Interlinear({
 function WordStudyPopover({
   rect,
   study,
-  pinned,
   onClose,
   onOpenDeepDive,
+  onNavigate,
 }: {
   rect: DOMRect;
   study: WordStudy;
-  pinned: boolean;
   onClose(): void;
   /** Opens the AI Assistant deep-dive drawer for this Strong's. */
   onOpenDeepDive(strong: string): void;
+  onNavigate(target: BibleNavTarget): void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   // Auto-computed viewport-clamped position. Starts below the token and
@@ -1676,7 +1509,6 @@ function WordStudyPopover({
   // even if the cursor leaves the popover mid-drag. Ignores drags that
   // originate on the close button.
   const onHeaderPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!pinned) return;
     if ((e.target as HTMLElement).closest("button")) return;
     e.preventDefault();
     const el = ref.current;
@@ -1717,11 +1549,9 @@ function WordStudyPopover({
       onMouseDown={(e) => e.stopPropagation()}
     >
       <div
-        className={`flex shrink-0 items-baseline gap-2 border-b border-[var(--color-rule)]/70 px-3 pb-1 pt-2 ${
-          pinned ? "cursor-grab active:cursor-grabbing select-none" : ""
-        }`}
+        className="flex shrink-0 cursor-grab items-baseline gap-2 border-b border-[var(--color-rule)]/70 px-3 pb-1 pt-2 active:cursor-grabbing select-none"
         onPointerDown={onHeaderPointerDown}
-        title={pinned ? "Drag to reposition" : undefined}
+        title="Drag to reposition"
       >
         <span className="font-serif text-base">{study.lexeme}</span>
         <span className="text-[11px] italic text-[var(--color-ink-2)]">
@@ -1733,22 +1563,24 @@ function WordStudyPopover({
         <span className="ml-auto text-[10px] uppercase tracking-widest text-[var(--color-ink-2)]">
           {study.strong}
         </span>
-        {pinned && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-1 rounded px-1 text-[var(--color-ink-2)] hover:bg-black/5"
-            aria-label="Close word study"
-          >
-            ×
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onClose}
+          className="ml-1 rounded px-1 text-[var(--color-ink-2)] hover:bg-black/5"
+          aria-label="Close word study"
+        >
+          ×
+        </button>
       </div>
 
       <div
         className="min-h-0 flex-1 overflow-y-auto px-3 py-2"
         style={{ maxHeight: maxBodyH }}
       >
+        <StrongsOccurrencesSection
+          strong={study.strong}
+          onNavigate={onNavigate}
+        />
         <div
           className="prose-bible text-[12px]"
           // The dictionary HTML is from a single, trusted upstream source
@@ -1756,11 +1588,10 @@ function WordStudyPopover({
           // and is sanitized of <S> footnotes by our server before display.
           dangerouslySetInnerHTML={{ __html: sanitizeDefHtml(study.detailHtml) }}
         />
-        {pinned && <PeriodUsageSection study={study} />}
+        <PeriodUsageSection study={study} />
       </div>
 
-      {pinned && (
-        <div className="flex shrink-0 justify-end border-t border-[var(--color-rule)]/60 px-3 py-1.5">
+      <div className="flex shrink-0 justify-end border-t border-[var(--color-rule)]/60 px-3 py-1.5">
           <button
             type="button"
             onClick={() => onOpenDeepDive(study.strong)}
@@ -1769,7 +1600,204 @@ function WordStudyPopover({
           >
             Deep study →
           </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Strong's concordance (KJV verse list) ────────────────────────────────
+
+function StrongsOccurrencesSection({
+  strong,
+  onNavigate,
+}: {
+  strong: string;
+  onNavigate(target: BibleNavTarget): void;
+}) {
+  const [versesExpanded, setVersesExpanded] = useState(false);
+  const [xrefsExpanded, setXrefsExpanded] = useState(false);
+  const [verseState, setVerseState] = useState<
+    | { kind: "loading" }
+    | { kind: "ready"; count: number; verses: StrongsOccurrenceVerse[] }
+    | { kind: "error"; message: string }
+  >({ kind: "loading" });
+  const [xrefState, setXrefState] = useState<
+    | { kind: "loading" }
+    | { kind: "ready"; count: number; xrefs: StrongsXRefRow[] }
+    | { kind: "error"; message: string }
+  >({ kind: "loading" });
+
+  useEffect(() => {
+    setVersesExpanded(false);
+    setXrefsExpanded(false);
+    setVerseState({ kind: "loading" });
+    setXrefState({ kind: "loading" });
+    const ctl = new AbortController();
+    const qs = new URLSearchParams({ strong });
+    fetch(`/api/bible/strongs?${qs.toString()}`, { signal: ctl.signal })
+      .then(async (r) => (await r.json()) as StrongsResponse)
+      .then((data) => {
+        if (data.error) {
+          return setVerseState({ kind: "error", message: data.error });
+        }
+        setVerseState({
+          kind: "ready",
+          count: data.count,
+          verses: data.verses ?? [],
+        });
+      })
+      .catch((e: unknown) => {
+        if ((e as { name?: string })?.name === "AbortError") return;
+        setVerseState({
+          kind: "error",
+          message: e instanceof Error ? e.message : "unknown error",
+        });
+      });
+    fetch(`/api/bible/strongs/xrefs?${qs.toString()}`, { signal: ctl.signal })
+      .then(async (r) => (await r.json()) as StrongsXRefsResponse)
+      .then((data) => {
+        if (data.error) {
+          return setXrefState({ kind: "error", message: data.error });
+        }
+        setXrefState({
+          kind: "ready",
+          count: data.count,
+          xrefs: data.xrefs ?? [],
+        });
+      })
+      .catch((e: unknown) => {
+        if ((e as { name?: string })?.name === "AbortError") return;
+        setXrefState({
+          kind: "error",
+          message: e instanceof Error ? e.message : "unknown error",
+        });
+      });
+    return () => ctl.abort();
+  }, [strong]);
+
+  const loading =
+    verseState.kind === "loading" || xrefState.kind === "loading";
+
+  return (
+    <div className="mb-2 border-b border-[var(--color-rule)]/70 pb-2">
+      <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
+        In the Bible
+      </div>
+
+      {loading && (
+        <p className="mt-1 text-[11px] text-[var(--color-ink-2)]">
+          Counting occurrences…
+        </p>
+      )}
+
+      {verseState.kind === "error" && (
+        <p className="mt-1 text-[11px] text-rose-700">{verseState.message}</p>
+      )}
+      {xrefState.kind === "error" && (
+        <p className="mt-1 text-[11px] text-rose-700">{xrefState.message}</p>
+      )}
+
+      {verseState.kind === "ready" && (
+        <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-[12px] text-[var(--color-ink)]">
+            {verseState.count === 0
+              ? "Not found in KJV interlinear"
+              : verseState.count === 1
+                ? "1 verse"
+                : `${verseState.count.toLocaleString()} verses`}
+          </span>
+          {verseState.count > 0 && (
+            <button
+              type="button"
+              onClick={() => setVersesExpanded((v) => !v)}
+              className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink)] underline decoration-[var(--color-rule)] underline-offset-2 hover:decoration-[var(--color-ink-2)]"
+              aria-expanded={versesExpanded}
+            >
+              {versesExpanded ? "Hide verses" : "View all verses"}
+            </button>
+          )}
         </div>
+      )}
+
+      {verseState.kind === "ready" && versesExpanded && verseState.count > 0 && (
+        <ul
+          className="mt-1.5 max-h-48 overflow-y-auto rounded border border-[var(--color-rule)]/60 bg-[var(--color-paper-2)]/40 py-1"
+          role="list"
+        >
+          {verseState.verses.map((v) => (
+            <li key={`${v.book}:${v.chapter}:${v.verse}`}>
+              <button
+                type="button"
+                onClick={() =>
+                  onNavigate({
+                    bookId: v.book,
+                    chapter: v.chapter,
+                    verse: v.verse,
+                  })
+                }
+                className="block w-full px-2 py-0.5 text-left font-serif text-[12px] text-[var(--color-ink)] hover:bg-black/5"
+              >
+                {v.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {xrefState.kind === "ready" && (
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-[12px] text-[var(--color-ink)]">
+            {xrefState.count === 0
+              ? "No xrefs"
+              : xrefState.count === 1
+                ? "1 xref"
+                : `${xrefState.count.toLocaleString()} xrefs`}
+          </span>
+          {xrefState.count > 0 && (
+            <button
+              type="button"
+              onClick={() => setXrefsExpanded((v) => !v)}
+              className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink)] underline decoration-[var(--color-rule)] underline-offset-2 hover:decoration-[var(--color-ink-2)]"
+              aria-expanded={xrefsExpanded}
+            >
+              {xrefsExpanded ? "Hide xrefs" : "View all xrefs"}
+            </button>
+          )}
+        </div>
+      )}
+
+      {xrefState.kind === "ready" && xrefsExpanded && xrefState.count > 0 && (
+        <ul
+          className="mt-1.5 max-h-48 overflow-y-auto rounded border border-[var(--color-rule)]/60 bg-[var(--color-paper-2)]/40 py-1"
+          role="list"
+        >
+          {xrefState.xrefs.map((x) => (
+            <li key={`${x.fromVerseLabel}:${x.toLabel}:${x.category}`}>
+              <button
+                type="button"
+                onClick={() =>
+                  onNavigate({
+                    bookId: x.to.book,
+                    chapter: x.to.chapter,
+                    verse: x.to.verseStart ?? 1,
+                  })
+                }
+                title={`${XREF_CATEGORY_LABEL[x.category] ?? x.category} — ${x.note}`}
+                className="block w-full px-2 py-1 text-left hover:bg-black/5"
+              >
+                <span className="font-serif text-[12px] text-[var(--color-ink)]">
+                  {x.toLabel}
+                </span>
+                <span className="ml-1.5 text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]">
+                  {XREF_CATEGORY_LABEL[x.category] ?? x.category}
+                </span>
+                <span className="mt-0.5 block text-[10px] text-[var(--color-ink-2)]">
+                  from {x.fromVerseLabel}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

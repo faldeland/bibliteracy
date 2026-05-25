@@ -11,7 +11,7 @@ import {
 // book-scoped overlay reads as the foreground without actually hiding the
 // poster entirely (0.06 is enough to still sense the shape underneath).
 const BASE_FADE_ALPHA = 0.08;
-import { BIBLE_BOOKS } from "@/lib/bible/books";
+import { makeXMapper, type XAxisMode } from "@/lib/bible/bibleXAxis";
 import {
   DEFAULT_XREF_VARIANT,
   loadCrossReferences,
@@ -54,47 +54,88 @@ function rampColor(distance: number): string {
   return COLOR_RAMP[Math.min(RAMP_SIZE - 1, Math.floor(t * RAMP_SIZE))];
 }
 
-// ── Layout: verse-uniform x ───────────────────────────────────────────────
+export type { XAxisMode } from "@/lib/bible/bibleXAxis";
+
+// ── Verse-only spokes (compact band above BooksLane) ───────────────────────
 //
-// On the standalone /atlas page we want to honor Harrison's original
-// layout: every verse takes the same width, so the bar chart of book
-// lengths underneath has the proportions that made the image iconic.
-// (BooksLane elsewhere in the app uses a word-proportional layout; that
-// layout is exposed via the `xMode="word"` prop for the embedded
-// mini-strip in BibleReader, where consistency matters more than fidelity
-// to the poster.)
+// Harrison semicircles need radius = half the horizontal span. In a ~52 px
+// band that radius is capped, so long cross-references no longer touch either
+// endpoint on the baseline — they look like random floating bumps. Spokes
+// always connect the active verse to each target with a bezier curve.
 
-export type XAxisMode = "verse" | "word";
+function spokeCurveHeight(baseline: number): number {
+  return Math.max(8, baseline - 4);
+}
 
-function makeXMapper(width: number, mode: XAxisMode): (idx: number) => number {
-  if (mode === "verse") {
-    return (idx: number) => (idx / TOTAL_VERSES) * width;
+function distToSpoke(
+  cx: number,
+  cy: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  cpY: number,
+): number {
+  let best = Infinity;
+  for (let s = 0; s <= 24; s += 1) {
+    const t = s / 24;
+    const u = 1 - t;
+    const x = u * u * u * x0 + 3 * u * u * t * x0 + 3 * u * t * t * x1 + t * t * t * x1;
+    const y = u * u * u * y0 + 3 * u * u * t * cpY + 3 * u * t * t * cpY + t * t * t * y1;
+    const d = Math.hypot(cx - x, cy - y);
+    if (d < best) best = d;
   }
-  // Word-proportional: walk the books in canonical order, map each book's
-  // verse range linearly onto its proportional pixel slice.
-  const totalWords = BIBLE_BOOKS.reduce((s, b) => s + b.words, 0);
-  type Slice = { start: number; end: number; xStart: number; xEnd: number };
-  const slices: Slice[] = [];
-  let xCursor = 0;
-  for (const b of BIBLE_BOOKS) {
-    const r = bookRange(b.id);
-    if (!r) continue;
-    const w = (b.words / totalWords) * width;
-    slices.push({ start: r.start, end: r.end, xStart: xCursor, xEnd: xCursor + w });
-    xCursor += w;
+  return best;
+}
+
+function drawVerseSpokes(
+  ctx: CanvasRenderingContext2D,
+  pairs: Uint32Array,
+  highlightVerseIndex: number,
+  xOf: (idx: number) => number,
+  baseline: number,
+  width: number,
+): void {
+  const xActive = xOf(highlightVerseIndex);
+  const cpY = baseline - spokeCurveHeight(baseline);
+
+  ctx.strokeStyle = "var(--color-rule)";
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, baseline);
+  ctx.lineTo(width, baseline);
+  ctx.stroke();
+
+  ctx.lineWidth = 1.2;
+  for (let i = 0; i < pairs.length; i += 2) {
+    const a = pairs[i];
+    const b = pairs[i + 1];
+    const targetIdx =
+      a === highlightVerseIndex ? b : b === highlightVerseIndex ? a : null;
+    if (targetIdx == null) continue;
+
+    const xTarget = xOf(targetIdx);
+    const dist = Math.abs(targetIdx - highlightVerseIndex);
+    ctx.strokeStyle = rampColor(dist);
+    ctx.globalAlpha = HIGHLIGHT_ALPHA;
+    ctx.beginPath();
+    ctx.moveTo(xActive, baseline);
+    ctx.bezierCurveTo(xActive, cpY, xTarget, cpY, xTarget, baseline);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = rampColor(dist);
+    ctx.beginPath();
+    ctx.arc(xTarget, baseline, 2.5, 0, 2 * Math.PI);
+    ctx.fill();
   }
-  return (idx: number) => {
-    // Slices are contiguous and in order, so a linear scan dominated by
-    // the cache is cheaper than binary search for our access patterns
-    // (we render in input order, which is roughly canonical).
-    for (const s of slices) {
-      if (idx < s.end) {
-        const t = (idx - s.start) / (s.end - s.start);
-        return s.xStart + t * (s.xEnd - s.xStart);
-      }
-    }
-    return width;
-  };
+
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "var(--color-ink)";
+  ctx.beginPath();
+  ctx.arc(xActive, baseline, 4, 0, 2 * Math.PI);
+  ctx.fill();
 }
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -129,6 +170,11 @@ interface CrossRefArcsProps {
    * unset.
    */
   xRange?: [number, number];
+  /**
+   * When a highlight is active, skip the background firehose entirely
+   * instead of fading it — useful for the compact band above BooksLane.
+   */
+  hideBaseWhenHighlighting?: boolean;
   /** Called when the user hovers an arc. */
   onHoverArc?: (info: ArcHoverInfo | null) => void;
   /** Called when the user clicks an arc (same hit-test rules as hover). */
@@ -153,6 +199,7 @@ export function CrossRefArcs({
   highlightVerseIndex = null,
   highlightBookId = null,
   xRange,
+  hideBaseWhenHighlighting = false,
   onHoverArc,
   onClickArc,
 }: CrossRefArcsProps) {
@@ -160,6 +207,18 @@ export function CrossRefArcs({
   // becomes scaffolding rather than the subject — we dim it via CSS so we
   // don't have to rerender the (expensive) base canvas on every hover.
   const isHighlighting = highlightVerseIndex != null || !!highlightBookId;
+  // Verse-only mode: draw just the active verse's arcs — no firehose at all.
+  const verseOnly =
+    hideBaseWhenHighlighting &&
+    highlightVerseIndex != null &&
+    !highlightBookId;
+  const skipBase = verseOnly;
+  const baseOpacity =
+    hideBaseWhenHighlighting && isHighlighting
+      ? 0
+      : isHighlighting
+        ? BASE_FADE_ALPHA
+        : 1;
   const baseRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const [data, setData] = useState<XRefData | null>(null);
@@ -186,7 +245,7 @@ export function CrossRefArcs({
   // the dimensions, or the layout mode change — NOT on hover.
   useEffect(() => {
     const canvas = baseRef.current;
-    if (!canvas || !data || width <= 0 || height <= 0) return;
+    if (!canvas || !data || width <= 0 || height <= 0 || skipBase) return;
     const dpr = Math.min(PIXEL_RATIO_CAP, window.devicePixelRatio || 1);
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
@@ -240,24 +299,24 @@ export function CrossRefArcs({
       }
       ctx.stroke();
     }
-  }, [data, width, height, xMode, xRange]);
+  }, [data, width, height, xMode, xRange, skipBase]);
 
   // Highlight pass: redraw only arcs touching the active highlight (either a
-  // single verse or every verse inside a hovered book). Lives on a separate
-  // canvas so the firehose isn't repainted on every hover.
+  // single verse or every verse inside a hovered book). In verse-only mode
+  // this is the sole canvas — the firehose base is never drawn.
   useEffect(() => {
-    const overlay = overlayRef.current;
-    if (!overlay || !data || width <= 0 || height <= 0) return;
+    const canvas = verseOnly ? baseRef.current : overlayRef.current;
+    if (!canvas || !data || width <= 0 || height <= 0) return;
     const dpr = Math.min(PIXEL_RATIO_CAP, window.devicePixelRatio || 1);
-    overlay.width = Math.round(width * dpr);
-    overlay.height = Math.round(height * dpr);
-    overlay.style.width = `${width}px`;
-    overlay.style.height = `${height}px`;
-    const ctx = overlay.getContext("2d");
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext("2d");
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
-    if (highlightVerseIndex == null && !highlightBookId) return;
+    if (!verseOnly && highlightVerseIndex == null && !highlightBookId) return;
 
     // Verse takes precedence — it's the stricter filter. If a book is
     // hovered instead, fall back to its [start, end) range.
@@ -278,8 +337,15 @@ export function CrossRefArcs({
       return false;
     };
 
+    const pairs = data.pairs;
     const xOf = makeXMapper(width, xMode);
     const baseline = height - BASELINE_PADDING;
+
+    if (verseOnly && highlightVerseIndex != null) {
+      drawVerseSpokes(ctx, pairs, highlightVerseIndex, xOf, baseline, width);
+      return;
+    }
+
     const maxRadius = baseline;
 
     // Book-scoped highlights can cover thousands of arcs; a single
@@ -288,7 +354,6 @@ export function CrossRefArcs({
     ctx.globalAlpha = bookR ? 0.55 : HIGHLIGHT_ALPHA;
     ctx.lineWidth = bookR ? 0.5 : 0.8;
 
-    const pairs = data.pairs;
     for (let i = 0; i < pairs.length; i += 2) {
       const a = pairs[i];
       const b = pairs[i + 1];
@@ -302,7 +367,15 @@ export function CrossRefArcs({
       ctx.arc(mid, baseline, r, Math.PI, 2 * Math.PI);
       ctx.stroke();
     }
-  }, [data, width, height, xMode, highlightVerseIndex, highlightBookId]);
+  }, [
+    data,
+    width,
+    height,
+    xMode,
+    highlightVerseIndex,
+    highlightBookId,
+    verseOnly,
+  ]);
 
   // Shared hit-test. Cheaper than full pixel-perfect picking: find the
   // nearest arc whose baseline-vertex distance to the cursor is small.
@@ -323,17 +396,44 @@ export function CrossRefArcs({
     const baseline = height - BASELINE_PADDING;
     if (cy > baseline) return null;
     const xOf = makeXMapper(width, xMode);
+    const pairs = data.pairs;
+    const cpY = baseline - spokeCurveHeight(baseline);
+    let bestResidual = 8;
+    let bestIdx = -1;
+
+    if (verseOnly && highlightVerseIndex != null) {
+      const xActive = xOf(highlightVerseIndex);
+      for (let i = 0; i < pairs.length; i += 2) {
+        const a = pairs[i];
+        const b = pairs[i + 1];
+        if (a !== highlightVerseIndex && b !== highlightVerseIndex) continue;
+        const targetIdx = a === highlightVerseIndex ? b : a;
+        const xTarget = xOf(targetIdx);
+        const residual = distToSpoke(
+          cx,
+          cy,
+          xActive,
+          baseline,
+          xTarget,
+          baseline,
+          cpY,
+        );
+        if (residual < bestResidual) {
+          bestResidual = residual;
+          bestIdx = i;
+        }
+      }
+    } else {
     // When a book is hovered, only arcs with an endpoint inside that book
     // are visible — restrict the hit-test to the same set so the tooltip
     // never describes an arc the user can't actually see.
     const bookR = highlightBookId ? bookRange(highlightBookId) : null;
-    const pairs = data.pairs;
-    let bestResidual = 6;
-    let bestIdx = -1;
     for (let i = 0; i < pairs.length; i += 2) {
       const a = pairs[i];
       const b = pairs[i + 1];
-      if (
+      if (highlightVerseIndex != null) {
+        if (a !== highlightVerseIndex && b !== highlightVerseIndex) continue;
+      } else if (
         bookR &&
         !(
           (a >= bookR.start && a < bookR.end) ||
@@ -357,6 +457,7 @@ export function CrossRefArcs({
         bestResidual = residual;
         bestIdx = i;
       }
+    }
     }
     if (bestIdx === -1) return null;
     const a = pairs[bestIdx];
@@ -400,13 +501,18 @@ export function CrossRefArcs({
     >
       <canvas
         ref={baseRef}
-        className="absolute inset-0 transition-opacity duration-150"
-        style={{ opacity: isHighlighting ? BASE_FADE_ALPHA : 1 }}
+        className={cn(
+          "absolute inset-0",
+          !verseOnly && "transition-opacity duration-150",
+        )}
+        style={{ opacity: verseOnly ? 1 : baseOpacity }}
       />
-      <canvas
-        ref={overlayRef}
-        className="pointer-events-none absolute inset-0"
-      />
+      {!verseOnly && (
+        <canvas
+          ref={overlayRef}
+          className="pointer-events-none absolute inset-0"
+        />
+      )}
       {!data && (
         <div className="absolute inset-0 flex items-center justify-center text-xs uppercase tracking-widest text-[var(--color-ink-2)]">
           Loading {variant === "recognized" ? "recognized" : "all"}{" "}

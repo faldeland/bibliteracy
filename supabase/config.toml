@@ -47,7 +47,7 @@ enabled = true
 # Primary domain Supabase falls back to in magic-link emails when the client's
 # `emailRedirectTo` isn't in the allow-list below. Production custom domain
 # is the canonical user-facing URL.
-site_url = "https://bibliteracy.com"
+site_url = "https://www.bibliteracy.com"
 # Allow-list for `emailRedirectTo` URLs the client can request. Supabase
 # accepts `*` as a wildcard within a single hostname segment (it does NOT
 # cross dots). The order doesn't matter; just keep every environment we
@@ -65,11 +65,20 @@ additional_redirect_urls = [
   "https://bibliteracy.vercel.app/auth/callback",
   "https://bibliteracy-*.vercel.app/auth/callback",
   "http://localhost:3000/auth/callback",
+  "http://127.0.0.1:3000/auth/callback",
+  "http://localhost:3000/**",
+  "http://127.0.0.1:3000/**",
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
 refresh_token_reuse_interval = 10
 enable_signup = true
+
+# Stay signed in for 30 days after the last visit (middleware refreshes the
+# session on each request). Without this, the hosted project may use a
+# shorter dashboard default. Use 720h — Go duration syntax has no "d" unit.
+[auth.sessions]
+inactivity_timeout = "720h"
 
 [auth.email]
 enable_signup = true

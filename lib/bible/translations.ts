@@ -1,16 +1,15 @@
 // Bible translations available through the keyless bolls.life API.
 //
-// Every translation renders as a normal verse paragraph in the reader; the
-// per-word interlinear lemma row is reserved for the original-language
-// Hebrew and Greek texts (Tanakh / Septuagint / Greek NT). The `hasStrongs`
-// flag still matters because:
+// Most English translations render as a normal verse paragraph in the reader;
+// the per-word interlinear lemma row is used for original-language Hebrew /
+// Greek texts (Tanakh / Septuagint / Greek NT) and for KJV when it is the
+// selected translation. The `hasStrongs` flag still matters because:
 //
 //   1. Entries whose `text` field embeds inline `<S>####</S>` tags power the
 //      BDB / Thayer's word-study popover and the cross-reference links.
-//   2. When the user reads a non-Strong's English translation, the reader
-//      shows a KJV parallel row underneath so a Strong's-tagged reference is
-//      always one glance away. KJV must stay `hasStrongs: true` for that to
-//      work even though its primary display is now a plain paragraph.
+//   2. When the user reads any other English translation, the reader always
+//      shows a KJV Strong's row underneath. KJV must stay `hasStrongs: true`
+//      for that parallel strip (and for its own interlinear when selected).
 //
 // ─── Licensing notice (please read) ──────────────────────────────────────────
 //
@@ -432,9 +431,8 @@ const RAW_TRANSLATIONS: readonly RawTranslation[] = [
   },
 
   // ── English, classic ─────────────────────────────────────────────────────
-  // KJV and ASV embed Strong's tags so they still drive the word-study
-  // popover and the KJV parallel strip, but the primary verse renders as a
-  // plain paragraph like every other translation.
+  // KJV embeds Strong's tags and renders as an interlinear when selected.
+  // ASV embeds Strong's tags but still uses the KJV parallel strip below.
   {
     id: "KJV",
     label: "KJV",

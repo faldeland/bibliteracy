@@ -15,6 +15,28 @@ beforeEach(() => {
     pxPerDay: ZOOM_PX_PER_DAY.week,
     centerDate: today(),
     selectedBookId: null,
+    bibleNavigationSeq: 0,
+    bibleNavigationTarget: null,
+    pinnedStrong: null,
+  });
+});
+
+describe("useGridStore — pinnedStrong", () => {
+  it("stores and clears the pinned Strong's number", () => {
+    useGridStore.getState().setPinnedStrong("G2316");
+    expect(useGridStore.getState().pinnedStrong).toBe("G2316");
+    useGridStore.getState().setPinnedStrong(null);
+    expect(useGridStore.getState().pinnedStrong).toBeNull();
+  });
+});
+
+describe("useGridStore — navigateBible", () => {
+  it("bumps seq and stores the target ref", () => {
+    const ref = { book: "Jhn", chapter: 3, verseStart: 16 };
+    useGridStore.getState().navigateBible(ref);
+    const s = useGridStore.getState();
+    expect(s.bibleNavigationSeq).toBe(1);
+    expect(s.bibleNavigationTarget).toEqual(ref);
   });
 });
 

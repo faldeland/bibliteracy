@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { LoungeChrome } from "@/components/lounge/LoungeChrome";
+import { LoungeProvider } from "@/components/lounge/LoungeProvider";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 
@@ -57,6 +59,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
   }, [queryClient]);
 
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <Suspense fallback={children}>
+        <LoungeProvider>
+          <LoungeChrome>{children}</LoungeChrome>
+        </LoungeProvider>
+      </Suspense>
+    </QueryClientProvider>
   );
 }

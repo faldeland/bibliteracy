@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { LoungeToggle } from "@/components/lounge/LoungeToggle";
 import { BibleReader } from "./BibleReader";
 import { BooksLane } from "./BooksLane";
 import { TimeRuler } from "./TimeRuler";
@@ -9,6 +10,8 @@ import { Lane } from "./Lane";
 import { DotSheet } from "./DotSheet";
 import { NewDotComposer } from "./NewDotComposer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
+import { StrongsFoundBand } from "./StrongsFoundBand";
+import { CrossRefBand } from "./CrossRefBand";
 import { TimelineSettingsSheet } from "./TimelineSettingsSheet";
 import {
   BibleHeaderSlot,
@@ -423,6 +426,8 @@ export function GridCanvas({
         className="relative flex flex-1 flex-col overflow-hidden"
       >
         <BibleReader />
+        <StrongsFoundBand />
+        <CrossRefBand />
         <BooksLane dots={dots} onHoverBook={setHoverBookId} />
         {selectedBookId && (
           <div className="flex items-center justify-between border-b border-[var(--color-rule)] bg-[var(--color-ink)]/90 px-4 py-1.5 text-[11px] text-[var(--color-paper)]">
@@ -622,12 +627,7 @@ function TopNav({ displayName }: { displayName?: string | null }) {
 
         <div className="mx-2 h-5 w-px bg-[var(--color-rule)]" />
 
-        <Link
-          href="/lounge"
-          className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"
-        >
-          Lounge
-        </Link>
+        <LoungeToggle />
         <Link
           href="/settings"
           className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"

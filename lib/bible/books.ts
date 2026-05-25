@@ -146,7 +146,7 @@ export function bookById(id: string): BibleBook | undefined {
   return BIBLE_BOOKS.find((b) => b.id === id);
 }
 
-/** Sectional groupings for visual headers above the BooksLane segments. */
+/** Sectional groupings for visual headers below the BooksLane segments. */
 export const SECTION_ORDER: TanakhSection[] = [
   "Torah",
   "Nevi'im",

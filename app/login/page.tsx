@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { setAuthNextCookie } from "@/lib/auth/postLoginNext";
 import { createClient } from "@/lib/supabase/client";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 
@@ -26,12 +27,15 @@ function LoginForm() {
   );
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  /** Supabase allow-list matches redirect URLs exactly — no `?next=` query string. */
   function buildCallbackUrl(): string {
     const origin =
       typeof window !== "undefined" ? window.location.origin : "";
-    const callback = new URL(`${origin}/auth/callback`);
-    callback.searchParams.set("next", nextParam);
-    return callback.toString();
+    return `${origin}/auth/callback`;
+  }
+
+  function rememberReturnPath(): void {
+    setAuthNextCookie(nextParam);
   }
 
   async function onSubmit(e: React.FormEvent) {
@@ -42,6 +46,7 @@ function LoginForm() {
     }
     setStatus("sending");
     setErrorMsg(null);
+    rememberReturnPath();
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
@@ -62,6 +67,7 @@ function LoginForm() {
     }
     setGoogleStatus("redirecting");
     setErrorMsg(null);
+    rememberReturnPath();
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",

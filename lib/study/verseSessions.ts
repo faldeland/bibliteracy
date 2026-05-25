@@ -8,8 +8,9 @@
  *
  * "Active" is defined as:
  *   • the tab is visible (`document.visibilityState === 'visible'`), and
- *   • there was a user activity event (mousemove, click, keydown,
- *     scroll, touchstart) within the last IDLE_THRESHOLD_MS.
+ *   • there was a mouse, keyboard, or touch event during the current
+ *     tick interval (mousemove, mousedown, click, keydown, keyup,
+ *     touchstart — not scroll/wheel).
  *
  * The tracker:
  *   • exposes `startSession(verseKey)` + `endSession()` for the reader
@@ -73,25 +74,18 @@ export interface TrackerSnapshot {
   totals: Record<VerseKey, VerseStats>;
   /**
    * True iff there's a live session AND the user is active right now
-   * (tab visible + activity event within IDLE_THRESHOLD_MS). When false
-   * with a non-null `current`, the timer is paused.
+   * (tab visible + mouse/keyboard/touch input during the current tick).
+   * When false with a non-null `current`, the timer is paused.
    */
   isActive: boolean;
   /** Epoch ms of the last recorded user-activity event. */
   lastActivityAt: number;
-  /** The idle-timeout cutoff the tracker uses, exposed for UI copy. */
-  idleThresholdMs: number;
+  /** Tick interval in ms; exposed for UI copy. */
+  tickMs: number;
 }
 
 // ─── Configuration ─────────────────────────────────────────────────────────
 
-/**
- * Milliseconds of inactivity after which the timer pauses. 30s is a
- * reasonable balance for reading: long enough that a slow re-read of
- * a single verse without mouse movement doesn't pause you, short
- * enough that actually walking away from the screen pauses quickly.
- */
-const IDLE_THRESHOLD_MS = 30_000;
 /** Heartbeat interval; lower = finer resolution, higher = cheaper. */
 const TICK_MS = 1_000;
 /** Append-only session log cap. Oldest entries get evicted past this. */
@@ -118,6 +112,8 @@ interface RuntimeState {
   log: SessionLogEntry[];
   /** Epoch ms of the last user-activity event. */
   lastActivityAt: number;
+  /** True when mouse/keyboard/touch fired since the last tick. */
+  sawInputThisTick: boolean;
   listeners: Set<(s: TrackerSnapshot) => void>;
   /** `setInterval` handle for the 1 Hz tick. */
   tickHandle: number | null;
@@ -130,6 +126,7 @@ const state: RuntimeState = {
   totals: {},
   log: [],
   lastActivityAt: 0,
+  sawInputThisTick: false,
   listeners: new Set(),
   tickHandle: null,
   initialized: false,
@@ -171,9 +168,9 @@ function snapshot(): TrackerSnapshot {
   return {
     current: state.current,
     totals: state.totals,
-    isActive: state.current ? isActiveNow() : false,
+    isActive: state.current ? isActiveForUi() : false,
     lastActivityAt: state.lastActivityAt,
-    idleThresholdMs: IDLE_THRESHOLD_MS,
+    tickMs: TICK_MS,
   };
 }
 
@@ -190,10 +187,21 @@ function notify() {
 
 // ─── Activity / tick loop ──────────────────────────────────────────────────
 
-function isActiveNow(): boolean {
+function isTabVisible(): boolean {
   if (typeof document === "undefined") return false;
-  if (document.visibilityState !== "visible") return false;
-  return Date.now() - state.lastActivityAt < IDLE_THRESHOLD_MS;
+  return document.visibilityState === "visible";
+}
+
+function isAccruingNow(): boolean {
+  return isTabVisible() && state.sawInputThisTick;
+}
+
+/** UI-facing: tab visible and input within the current tick window. */
+function isActiveForUi(): boolean {
+  if (!isTabVisible()) return false;
+  if (state.sawInputThisTick) return true;
+  if (state.lastActivityAt <= 0) return false;
+  return Date.now() - state.lastActivityAt < TICK_MS;
 }
 
 function onActivity() {
@@ -202,22 +210,22 @@ function onActivity() {
   // tick. We don't notify on every event (mousemove fires hundreds of
   // times a second) — only when there's a live session and the flip
   // actually happened.
-  const wasActive = state.current ? isActiveNow() : false;
+  const wasAccruing = state.current ? isAccruingNow() : false;
+  state.sawInputThisTick = true;
   state.lastActivityAt = Date.now();
-  if (state.current && !wasActive) notify();
+  if (state.current && !wasAccruing) notify();
 }
 
 function tick() {
   const cur = state.current;
-  if (!cur) return;
-  if (isActiveNow()) {
+  if (cur && isAccruingNow()) {
     cur.activeMs += TICK_MS;
   }
+  state.sawInputThisTick = false;
   // Notify every tick while a session is live, even when paused, so
   // subscribers can render "paused — idle for 12s" and so the
-  // active → idle edge triggers a re-render once the user stops
-  // moving for IDLE_THRESHOLD_MS.
-  notify();
+  // active → idle edge triggers a re-render once input stops.
+  if (cur) notify();
 }
 
 // ─── Runtime setup ─────────────────────────────────────────────────────────
@@ -228,27 +236,23 @@ function ensureRuntime() {
   const persisted = loadPersisted();
   state.totals = persisted.totals;
   state.log = persisted.log;
-  state.lastActivityAt = Date.now();
-
-  const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = [
+  const INPUT_EVENTS: Array<keyof WindowEventMap> = [
     "mousemove",
     "mousedown",
     "click",
     "keydown",
-    "wheel",
+    "keyup",
     "touchstart",
-    "scroll",
   ];
-  for (const type of ACTIVITY_EVENTS) {
+  for (const type of INPUT_EVENTS) {
     window.addEventListener(type, onActivity, { passive: true });
   }
 
-  // Pause-on-hide / resume-on-show is implicit (isActiveNow rejects),
-  // but we also want to flush totals the moment the user tabs away so
-  // we don't lose credit on a hard close.
+  // Pause-on-hide is implicit (isAccruingNow rejects hidden tabs), but
+  // flush totals the moment the user tabs away so we don't lose credit
+  // on a hard close.
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") savePersisted();
-    else state.lastActivityAt = Date.now();
   });
   window.addEventListener("beforeunload", () => {
     endSessionInternal();
@@ -278,9 +282,6 @@ export function startSession(meta: VerseMeta) {
     startedAt: Date.now(),
     activeMs: 0,
   };
-  // Kick last-activity so the first tick counts if the user is obviously
-  // present (they just navigated — that was a click or a key).
-  state.lastActivityAt = Date.now();
   notify();
 }
 

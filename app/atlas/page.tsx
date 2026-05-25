@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { LoungeToggle } from "@/components/lounge/LoungeToggle";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CrossRefArcs,
@@ -168,6 +169,7 @@ export default function AtlasPage() {
             title="Books sized by original-language word count, matching BooksLane"
           />
           <div className="mx-2 h-5 w-px bg-[var(--color-rule)]" />
+          <LoungeToggle />
           <Link
             href="/"
             className="rounded-md px-2.5 py-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-ink-2)] hover:bg-black/5"

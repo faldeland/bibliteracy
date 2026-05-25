@@ -49,8 +49,8 @@ export function TimelineSettingsSheet({
       />
       <aside
         className={cn(
-          "fixed right-0 top-0 z-50 h-full w-full max-w-sm bg-[var(--color-paper)] shadow-2xl transition-transform",
-          open ? "translate-x-0" : "translate-x-full",
+          "fixed right-0 top-0 z-50 h-full w-full max-w-sm bg-[var(--color-paper)] transition-transform",
+          open ? "translate-x-0 shadow-2xl" : "translate-x-full",
         )}
         aria-hidden={!open}
       >

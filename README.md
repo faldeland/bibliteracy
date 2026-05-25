@@ -53,8 +53,12 @@ To turn it on for a deployment:
    client ID + secret and enable the provider.
 3. **Supabase Dashboard** → Authentication → URL Configuration → add your
    site URL (e.g. `https://example.com`) and add `https://example.com/auth/callback`
-   to the redirect allow-list. Add `http://localhost:3000/auth/callback`
-   too while developing.
+   to the redirect allow-list. For local dev add **both**
+   `http://localhost:3000/auth/callback` and `http://127.0.0.1:3000/auth/callback`
+   (use the same hostname in the browser that you listed). If Google sign-in
+   still lands on production, the allow-list on the **hosted** project is
+   missing those URLs — mirror `supabase/config.toml` with
+   `npx supabase config push --linked` or paste the entries manually.
 
 For the local Supabase stack, set these in `supabase/config.toml` (or env
 vars) before `npm run db:start`:

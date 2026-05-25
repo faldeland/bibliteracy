@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build:xrefs": "tsx scripts/buildCrossRefs.ts",
+    "build:strongs": "tsx scripts/buildStrongsIndex.ts",
     "verify": "npm run lint && npm run typecheck && npm run test",
     "db:start": "supabase start",
     "db:stop": "supabase stop",

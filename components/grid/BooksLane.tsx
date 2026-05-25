@@ -51,7 +51,7 @@ export function BooksLane({ dots = [], onHoverBook }: BooksLaneProps) {
     [refCount],
   );
 
-  // Group books by section so we can render section headers above them.
+  // Group books by section so we can render section headers below them.
   // The section's viewport-percentage is sectionWords / TOTAL_BIBLE_WORDS, and
   // each book inside is sized as a percentage of *its section* (not of the
   // whole Bible). Because the section already has the right total width, this
@@ -68,20 +68,6 @@ export function BooksLane({ dots = [], onHoverBook }: BooksLaneProps) {
 
   return (
     <div className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]/60">
-      {/* Section header row */}
-      <div className="flex h-5 w-full text-[10px] uppercase tracking-widest text-[var(--color-ink-2)]">
-        {sections.map(({ section, widthPct }) => (
-          <div
-            key={section}
-            className="flex items-center justify-center border-r border-[var(--color-rule)] last:border-r-0"
-            style={{ width: `${widthPct}%` }}
-            title={section}
-          >
-            <span className="truncate px-1">{section}</span>
-          </div>
-        ))}
-      </div>
-
       {/* Books row */}
       <div className="flex h-12 w-full">
         {sections.map(({ section, books, widthPct, totalSectionWords }) => (
@@ -104,6 +90,20 @@ export function BooksLane({ dots = [], onHoverBook }: BooksLaneProps) {
                 onHover={onHoverBook}
               />
             ))}
+          </div>
+        ))}
+      </div>
+
+      {/* Section header row */}
+      <div className="flex h-5 w-full text-[10px] uppercase tracking-widest text-[var(--color-ink-2)]">
+        {sections.map(({ section, widthPct }) => (
+          <div
+            key={section}
+            className="flex items-center justify-center border-r border-[var(--color-rule)] last:border-r-0"
+            style={{ width: `${widthPct}%` }}
+            title={section}
+          >
+            <span className="truncate px-1">{section}</span>
           </div>
         ))}
       </div>
@@ -150,7 +150,10 @@ function BookSegment({
       {density > 0 && !selected && (
         <span
           className="pointer-events-none absolute bottom-0 left-0 right-0 bg-[var(--color-ink)]"
-          style={{ height: `${Math.max(2, density * 16)}px`, opacity: 0.18 + density * 0.5 }}
+          style={{
+            height: `${Math.max(2, density * 16)}px`,
+            opacity: 0.18 + density * 0.5,
+          }}
         />
       )}
       <span className="relative truncate leading-none">{book.abbr}</span>

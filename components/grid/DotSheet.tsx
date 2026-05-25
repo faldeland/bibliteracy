@@ -81,8 +81,10 @@ export function DotSheet({
         // slides off-screen and its pointer events are disabled so it can't
         // intercept clicks.
         className={cn(
-          "fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-[var(--color-rule)] bg-[var(--color-paper)] shadow-2xl transition-transform",
-          hidden ? "pointer-events-none translate-x-full" : "translate-x-0",
+          "fixed right-0 top-0 z-50 flex h-full w-full max-w-md flex-col border-l border-[var(--color-rule)] bg-[var(--color-paper)] transition-transform",
+          hidden
+            ? "pointer-events-none translate-x-full"
+            : "translate-x-0 shadow-2xl",
         )}
         aria-hidden={hidden}
         aria-label="Dot details"

@@ -48,6 +48,26 @@ function pathsFor(variant: XRefVariant): { bin: string; meta: string } {
   return { bin: `/data/${stem}.bin`, meta: `/data/${stem}.meta.json` };
 }
 
+/** True when at least one packed pair touches `verseIdx`. */
+export function verseHasCrossRefs(
+  pairs: Uint32Array,
+  verseIdx: number,
+): boolean {
+  return countVerseCrossRefs(pairs, verseIdx) > 0;
+}
+
+/** Count packed pairs touching `verseIdx`. */
+export function countVerseCrossRefs(
+  pairs: Uint32Array,
+  verseIdx: number,
+): number {
+  let n = 0;
+  for (let i = 0; i < pairs.length; i += 2) {
+    if (pairs[i] === verseIdx || pairs[i + 1] === verseIdx) n += 1;
+  }
+  return n;
+}
+
 export function loadCrossReferences(
   variant: XRefVariant = DEFAULT_XREF_VARIANT,
 ): Promise<XRefData> {
