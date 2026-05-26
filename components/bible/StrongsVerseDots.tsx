@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { makeXMapper, type XAxisMode } from "@/lib/bible/bibleXAxis";
 import {
   hitTestStrongsVerseDot,
@@ -8,9 +8,10 @@ import {
   strongsVerseDotY,
 } from "@/lib/bible/strongsVerseDotHitTest";
 
-const PIXEL_RATIO_CAP = 2;
-const DOT_ALPHA = 0.42;
+/** Odd CSS px size, snapped to integer centers. */
 const DOT_SIZE = 3;
+const DOT_HALF = (DOT_SIZE - 1) / 2;
+
 export interface StrongsVerseDotHover {
   verseIndex: number;
   /** Local x within the band (px). */
@@ -28,6 +29,23 @@ interface StrongsVerseDotsProps {
   onVerseClick?: (verseIndex: number) => void;
 }
 
+/** One 3×3 px square per occurrence, merged into a single path for perf. */
+function buildDotsPath(
+  indices: Uint32Array,
+  xOf: (idx: number) => number,
+  dotY: number,
+): string {
+  if (indices.length === 0) return "";
+  const parts: string[] = [];
+  for (let i = 0; i < indices.length; i++) {
+    const x = Math.round(xOf(indices[i]!));
+    const left = x - DOT_HALF;
+    const top = dotY - DOT_HALF;
+    parts.push(`M${left},${top}h${DOT_SIZE}v${DOT_SIZE}h${-DOT_SIZE}z`);
+  }
+  return parts.join("");
+}
+
 /**
  * Renders one dot per verse on the word-proportional bible strip (same x-axis
  * as BooksLane and CrossRefBand).
@@ -40,37 +58,13 @@ export function StrongsVerseDots({
   onHover,
   onVerseClick,
 }: StrongsVerseDotsProps) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
   const xOf = useMemo(() => makeXMapper(width, xMode), [width, xMode]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || width <= 0 || height <= 0) return;
-
-    const dpr = Math.min(PIXEL_RATIO_CAP, window.devicePixelRatio || 1);
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-
-    const dotY = strongsVerseDotY(height);
-    const half = DOT_SIZE / 2;
-
-    ctx.fillStyle = "var(--color-ink)";
-
-    for (let i = 0; i < indices.length; i++) {
-      const idx = indices[i]!;
-      const x = xOf(idx);
-      ctx.globalAlpha = DOT_ALPHA;
-      ctx.fillRect(x - half, dotY - half, DOT_SIZE, DOT_SIZE);
-    }
-  }, [width, height, indices, xOf]);
+  const dotY = Math.round(strongsVerseDotY(height));
+  const dotsPath = useMemo(
+    () => buildDotsPath(indices, xOf, dotY),
+    [indices, xOf, dotY],
+  );
 
   const hitTestAt = useCallback(
     (clientX: number, clientY: number) => {
@@ -124,16 +118,28 @@ export function StrongsVerseDots({
 
   const interactive = !!(onHover || onVerseClick);
 
+  if (width <= 0 || height <= 0) return null;
+
   return (
     <div
       className="pointer-events-none absolute inset-0 z-20"
       style={{ width, height }}
     >
-      <canvas
-        ref={canvasRef}
-        className="pointer-events-none absolute inset-0"
+      <svg
+        className="pointer-events-none absolute inset-0 overflow-visible"
+        width={width}
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
         aria-hidden
-      />
+      >
+        {dotsPath && (
+          <path
+            d={dotsPath}
+            className="fill-[var(--color-ink)]"
+            shapeRendering="crispEdges"
+          />
+        )}
+      </svg>
       {interactive && (
         <div
           ref={hostRef}

@@ -433,3 +433,23 @@ export const TIMELINE_HEIGHT_PX: Record<TimelineHeightPreset, number> = {
   normal: 42,
   tall: 72,
 };
+
+export const TIMELINE_HEIGHT_PRESET_ORDER: TimelineHeightPreset[] = [
+  "compact",
+  "normal",
+  "tall",
+];
+
+/** Step row height up (+1) or down (−1); clamps at compact/tall. */
+export function stepTimelineHeightPreset(
+  current: TimelineHeightPreset,
+  delta: -1 | 1,
+): TimelineHeightPreset {
+  const i = TIMELINE_HEIGHT_PRESET_ORDER.indexOf(current);
+  const base = i >= 0 ? i : TIMELINE_HEIGHT_PRESET_ORDER.indexOf("normal");
+  const next = Math.max(
+    0,
+    Math.min(TIMELINE_HEIGHT_PRESET_ORDER.length - 1, base + delta),
+  );
+  return TIMELINE_HEIGHT_PRESET_ORDER[next]!;
+}

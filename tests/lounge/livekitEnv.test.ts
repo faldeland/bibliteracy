@@ -38,4 +38,14 @@ describe("livekitEnv", () => {
     process.env.LIVEKIT_API_SECRET = "PASTE_LIVEKIT_API_SECRET_HERE";
     expect(isLiveKitPlaceholderConfig()).toBe(true);
   });
+
+  it("uses LIVEKIT_URL when NEXT_PUBLIC is still the example placeholder", () => {
+    process.env.NEXT_PUBLIC_LIVEKIT_URL = "wss://your-project.livekit.cloud";
+    process.env.LIVEKIT_URL = "wss://bibliteracy.example.livekit.cloud";
+    process.env.LIVEKIT_API_KEY = "APIreal";
+    process.env.LIVEKIT_API_SECRET = "secretreal";
+    expect(livekitWsUrl()).toBe("wss://bibliteracy.example.livekit.cloud");
+    expect(isLiveKitPlaceholderConfig()).toBe(false);
+    expect(isLiveKitServerConfigured()).toBe(true);
+  });
 });

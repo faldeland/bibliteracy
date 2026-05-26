@@ -8,7 +8,7 @@ import { LoungeStreamBar } from "./LoungeStreamBar";
  */
 export function LoungeChrome({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
       <LoungeStreamBar />
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
     </div>

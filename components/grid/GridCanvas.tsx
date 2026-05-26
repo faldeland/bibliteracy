@@ -39,7 +39,11 @@ import { useGridStore } from "@/lib/grid/state";
 import { zoomLevelFor, ZOOM_PX_PER_DAY, type ZoomLevel } from "@/lib/grid/time";
 import type { Dot, DotKind } from "@/lib/grid/types";
 import type { DotUpdate, NewDotInput } from "@/lib/grid/dotsApi";
-import { useTimelines, type Timeline } from "@/lib/grid/timelinesApi";
+import {
+  stepTimelineHeightPreset,
+  useTimelines,
+  type Timeline,
+} from "@/lib/grid/timelinesApi";
 
 const BUILTIN_ACCENT: Record<DotKind, string> = {
   logos: "var(--color-logos)",
@@ -461,6 +465,15 @@ export function GridCanvas({
     },
     [updateTimeline],
   );
+  const handleAdjustHeight = useCallback(
+    (t: Timeline, delta: -1 | 1) => {
+      const next = stepTimelineHeightPreset(t.heightPreset, delta);
+      if (next !== t.heightPreset) {
+        void updateTimeline(t.id, { heightPreset: next });
+      }
+    },
+    [updateTimeline],
+  );
   const handleDeleteFromSheet = useCallback(
     (t: Timeline) => {
       // Reuse the confirm + delete flow, closing the sheet on success.
@@ -517,6 +530,7 @@ export function GridCanvas({
                       onRename={handleRenameTimeline}
                       onDelete={handleDeleteTimeline}
                       onOpenSettings={handleOpenSettings}
+                      onAdjustHeight={handleAdjustHeight}
                       isDragging={dragState?.draggingId === t.id}
                       isDropTarget={dragState?.dropIndex === idx}
                       laneIndex={idx}
@@ -571,6 +585,7 @@ export function GridCanvas({
       handleRenameTimeline,
       handleDeleteTimeline,
       handleOpenSettings,
+      handleAdjustHeight,
       dragState,
       handleDragStart,
       setDropIndex,

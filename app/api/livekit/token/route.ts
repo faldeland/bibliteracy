@@ -3,6 +3,7 @@ import { AccessToken } from "livekit-server-sdk";
 import { ensureLoungeRoom } from "@/lib/lounge/ensureLoungeRoom";
 import {
   isLiveKitPlaceholderConfig,
+  LIVEKIT_SETUP_HINT,
   livekitApiKey,
   livekitApiSecret,
   livekitWsUrl,
@@ -39,13 +40,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (isLiveKitPlaceholderConfig()) {
-    return NextResponse.json(
-      {
-        error:
-          "LiveKit still uses placeholder values in .env.local — set NEXT_PUBLIC_LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET from cloud.livekit.io",
-      },
-      { status: 503 },
-    );
+    return NextResponse.json({ error: LIVEKIT_SETUP_HINT }, { status: 503 });
   }
 
   // Resolve identity from Supabase session if available; otherwise use a

@@ -60,11 +60,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Suspense fallback={children}>
-        <LoungeProvider>
-          <LoungeChrome>{children}</LoungeChrome>
-        </LoungeProvider>
-      </Suspense>
+      <div className="h-dvh min-h-0 overflow-hidden">
+        <Suspense fallback={children}>
+          <LoungeProvider>
+            <LoungeChrome>{children}</LoungeChrome>
+          </LoungeProvider>
+        </Suspense>
+      </div>
     </QueryClientProvider>
   );
 }

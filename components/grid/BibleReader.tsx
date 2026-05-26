@@ -632,10 +632,9 @@ export function BibleReader() {
   }, [studyVerse]);
 
   // ── Strong's highlight + popover ──────────────────────────────────────
-  // Hover drives xref-band / token styling only. Click opens the word-study
-  // popover. Leaving a token (without entering another) locks the highlight.
+  // First click selects a token (xref band + tile highlight). A second click
+  // on the same token opens the word-study popover; a third click closes it.
 
-  const [hoveredStrong, setHoveredStrong] = useState<string | null>(null);
   const pinnedStrong = useGridStore((s) => s.pinnedStrong);
   const setPinnedStrong = useGridStore((s) => s.setPinnedStrong);
   const [popover, setPopover] = useState<{
@@ -643,47 +642,22 @@ export function BibleReader() {
     rect: DOMRect;
   } | null>(null);
 
-  const highlightStrong =
-    hoveredStrong ?? popover?.strong ?? pinnedStrong ?? null;
+  const highlightStrong = popover?.strong ?? pinnedStrong ?? null;
 
-  const tokenLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearTokenLeaveTimer = useCallback(() => {
-    if (tokenLeaveTimer.current) {
-      clearTimeout(tokenLeaveTimer.current);
-      tokenLeaveTimer.current = null;
-    }
-  }, []);
-
-  const onTokenEnter = useCallback(
-    (strong: string) => {
-      clearTokenLeaveTimer();
-      setHoveredStrong(strong);
-      setPinnedStrong(null);
-    },
-    [clearTokenLeaveTimer, setPinnedStrong],
-  );
-  const onTokenLeave = useCallback(() => {
-    clearTokenLeaveTimer();
-    tokenLeaveTimer.current = setTimeout(() => {
-      setHoveredStrong((cur) => {
-        if (cur) setPinnedStrong(cur);
-        return null;
-      });
-    }, 160);
-  }, [clearTokenLeaveTimer, setPinnedStrong]);
   const onTokenClick = useCallback(
     (strong: string, el: HTMLElement) => {
-      clearTokenLeaveTimer();
-      setPinnedStrong(strong);
       if (popover?.strong === strong) {
         setPopover(null);
-        setHoveredStrong(strong);
         return;
       }
-      setHoveredStrong(null);
-      setPopover({ strong, rect: el.getBoundingClientRect() });
+      if (pinnedStrong === strong) {
+        setPopover({ strong, rect: el.getBoundingClientRect() });
+        return;
+      }
+      setPinnedStrong(strong);
+      setPopover(null);
     },
-    [clearTokenLeaveTimer, popover, setPinnedStrong],
+    [pinnedStrong, popover, setPinnedStrong],
   );
 
   // Close popover when user clicks outside it (highlight stays locked).
@@ -706,7 +680,6 @@ export function BibleReader() {
   }, [highlightStrong, setHighlightStrong]);
 
   useEffect(() => {
-    setHoveredStrong(null);
     setPopover(null);
   }, [bookId, chapter, verse]);
 
@@ -928,8 +901,6 @@ export function BibleReader() {
                     studies={studies}
                     isHebrew={book.testament === "OT"}
                     verseDir={effectiveTranslation.dir}
-                    onTokenEnter={onTokenEnter}
-                    onTokenLeave={onTokenLeave}
                     onTokenClick={onTokenClick}
                     activeStrong={highlightStrong}
                   />
@@ -973,7 +944,7 @@ export function BibleReader() {
               style={fixedHeightStyle(BIBLE_READER_KJV_LABEL_PX)}
             >
               <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-                KJV
+                Strong&apos;s KJV
               </span>
               <span className="text-[10px] italic text-[var(--color-ink-2)]/70">
                 with BDB-Thayer&apos;s
@@ -989,8 +960,6 @@ export function BibleReader() {
                   studies={studies}
                   isHebrew={book.testament === "OT"}
                   verseDir="ltr"
-                  onTokenEnter={onTokenEnter}
-                  onTokenLeave={onTokenLeave}
                   onTokenClick={onTokenClick}
                   activeStrong={highlightStrong}
                 />
@@ -1003,7 +972,7 @@ export function BibleReader() {
             </div>
           </div>
           <StrongResizeHandle
-            label="Resize KJV panel"
+            label="Resize Strong's KJV panel"
             onResize={resizeKjv}
           />
         </div>
@@ -1236,8 +1205,6 @@ function Interlinear({
   studies,
   isHebrew,
   verseDir,
-  onTokenEnter,
-  onTokenLeave,
   onTokenClick,
   activeStrong,
 }: {
@@ -1251,8 +1218,6 @@ function Interlinear({
    * sets its own per-token `dir`).
    */
   verseDir: "ltr" | "rtl";
-  onTokenEnter(strong: string): void;
-  onTokenLeave(): void;
   onTokenClick(strong: string, el: HTMLElement): void;
   activeStrong: string | null;
 }) {
@@ -1360,12 +1325,6 @@ function Interlinear({
             type="button"
             data-bible-token
             disabled={!interactive}
-            onMouseEnter={
-              interactive ? () => onTokenEnter(tok.strong!) : undefined
-            }
-            onMouseLeave={interactive ? onTokenLeave : undefined}
-            onFocus={interactive ? () => onTokenEnter(tok.strong!) : undefined}
-            onBlur={interactive ? onTokenLeave : undefined}
             onClick={
               interactive
                 ? (e) =>

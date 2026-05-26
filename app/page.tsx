@@ -39,7 +39,7 @@ export default async function Home() {
     .maybeSingle();
 
   return (
-    <main className="h-dvh w-dvw">
+    <main className="h-full min-h-0 w-full">
       <GridShell
         userId={user.id}
         displayName={profile?.display_name ?? null}

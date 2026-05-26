@@ -4,6 +4,7 @@ import { useLocalParticipant } from "@livekit/components-react";
 import type { TrackReferenceOrPlaceholder } from "@livekit/components-core";
 import { resolveCameraTrackRef } from "@/lib/lounge/loungeTrackRefs";
 import { useEffect, useRef } from "react";
+import { LoungeLocalTileControls } from "./LoungeLocalTileControls";
 
 interface LoungeParticipantVideoProps {
   trackRef: TrackReferenceOrPlaceholder;
@@ -25,6 +26,7 @@ export function LoungeParticipantVideo({ trackRef }: LoungeParticipantVideoProps
   });
   const mediaTrack = resolved?.publication?.track;
   const trackSid = resolved?.publication?.trackSid;
+  const isLocal = trackRef.participant.isLocal;
 
   useEffect(() => {
     const el = videoRef.current;
@@ -40,20 +42,26 @@ export function LoungeParticipantVideo({ trackRef }: LoungeParticipantVideoProps
 
   if (!resolved || !mediaTrack) {
     return (
-      <div className="flex h-full w-full items-center justify-center bg-black/60 text-[10px] text-white/50">
-        Camera off
+      <div className="relative h-full w-full">
+        <div className="flex h-full w-full items-center justify-center bg-black/60 text-[10px] text-white/50">
+          Camera off
+        </div>
+        {isLocal ? <LoungeLocalTileControls /> : null}
       </div>
     );
   }
 
   return (
-    <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      muted
-      className="lounge-participant-video absolute inset-0 h-full w-full object-cover"
-      data-lk-local-participant={resolved.participant.isLocal ? "" : undefined}
-    />
+    <div className="relative h-full w-full">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="lounge-participant-video absolute inset-0 h-full w-full object-cover"
+        data-lk-local-participant={isLocal ? "" : undefined}
+      />
+      {isLocal ? <LoungeLocalTileControls /> : null}
+    </div>
   );
 }

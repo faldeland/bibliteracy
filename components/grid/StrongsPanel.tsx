@@ -133,8 +133,6 @@ type LoadState =
 /** Strong's concordance search and verse list for the grid bottom pane. */
 
 export function StrongsPanel() {
-  const highlightStrong = useGridStore((s) => s.highlightStrong);
-
   const pinnedStrong = useGridStore((s) => s.pinnedStrong);
 
   const setPinnedStrong = useGridStore((s) => s.setPinnedStrong);
@@ -153,6 +151,15 @@ export function StrongsPanel() {
 
   const loadedStrongRef = useRef<string | null>(null);
 
+  /** First click/focus selects all; second click places the caret. */
+  const selectAllOnClickRef = useRef(true);
+
+  /** Bumps when a new panel fetch starts so stale responses are ignored. */
+  const fetchGenRef = useRef(0);
+
+  /** True while showing English word matches — blocks reader pin/highlight sync. */
+  const wordSearchActiveRef = useRef(false);
+
 
 
   const loadStrong = useCallback(
@@ -162,6 +169,10 @@ export function StrongsPanel() {
       if (!opts?.force && loadedStrongRef.current === strong) return;
 
 
+
+      const gen = ++fetchGenRef.current;
+
+      wordSearchActiveRef.current = false;
 
       loadedStrongRef.current = strong;
 
@@ -188,6 +199,10 @@ export function StrongsPanel() {
         const occ = (await occRes.json()) as StrongsOccurrencesResponse;
 
         const words = (await wordsRes.json()) as WordsResponse;
+
+
+
+        if (gen !== fetchGenRef.current) return;
 
 
 
@@ -231,6 +246,8 @@ export function StrongsPanel() {
 
       } catch (e) {
 
+        if (gen !== fetchGenRef.current) return;
+
         loadedStrongRef.current = null;
 
         setState({
@@ -255,6 +272,10 @@ export function StrongsPanel() {
 
   const searchWord = useCallback(async (word: string) => {
 
+    const gen = ++fetchGenRef.current;
+
+    wordSearchActiveRef.current = true;
+
     loadedStrongRef.current = null;
 
     setPinnedStrong(null);
@@ -272,6 +293,10 @@ export function StrongsPanel() {
       );
 
       const data = (await res.json()) as StrongsWordSearchResponse;
+
+      if (gen !== fetchGenRef.current) return;
+
+
 
       if (!res.ok || data.error) {
 
@@ -302,6 +327,8 @@ export function StrongsPanel() {
       setState({ kind: "word-matches", word, matches });
 
     } catch (e) {
+
+      if (gen !== fetchGenRef.current) return;
 
       setState({
 
@@ -355,6 +382,8 @@ export function StrongsPanel() {
 
 
 
+      wordSearchActiveRef.current = true;
+
       setQuery(classified.word);
 
       await searchWord(classified.word);
@@ -368,12 +397,22 @@ export function StrongsPanel() {
 
 
   useEffect(() => {
-    const activeStrong = highlightStrong ?? pinnedStrong;
-    if (!activeStrong) return;
+    // Follow explicit reader/panel pins only — not ephemeral highlightStrong,
+    // which can still point at the previous word after a dictionary search.
+    if (wordSearchActiveRef.current) {
+      if (!pinnedStrong) return;
+      wordSearchActiveRef.current = false;
+    }
 
-    setQuery(activeStrong);
-    void loadStrong(activeStrong, { pin: false });
-  }, [highlightStrong, pinnedStrong, loadStrong]);
+    if (!pinnedStrong) return;
+
+    if (loadedStrongRef.current === pinnedStrong) return;
+
+    setQuery(pinnedStrong);
+
+    void loadStrong(pinnedStrong, { pin: false });
+
+  }, [pinnedStrong, loadStrong]);
 
 
 
@@ -382,6 +421,78 @@ export function StrongsPanel() {
     e.preventDefault();
 
     void runSearch(query, { force: true });
+
+  };
+
+
+
+  const selectAllInSearch = (input: HTMLInputElement | null) => {
+
+    if (!query || !input) return;
+
+    input.setSelectionRange(0, query.length);
+
+    selectAllOnClickRef.current = false;
+
+  };
+
+
+
+  const onSearchMouseDown = (e: React.MouseEvent<HTMLInputElement>) => {
+
+    if (!query) return;
+
+    const input = e.currentTarget;
+
+    if (e.detail >= 2) {
+
+      e.preventDefault();
+
+      selectAllInSearch(input);
+
+      return;
+
+    }
+
+    if (selectAllOnClickRef.current) {
+
+      e.preventDefault();
+
+      input.focus();
+
+      selectAllInSearch(input);
+
+    }
+
+  };
+
+
+
+  const onSearchFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+
+    if (!selectAllOnClickRef.current || !query) return;
+
+    const input = e.currentTarget;
+
+    requestAnimationFrame(() => selectAllInSearch(input));
+
+  };
+
+
+
+  const onSearchBlur = () => {
+
+    selectAllOnClickRef.current = true;
+
+  };
+
+
+
+  const onSearchDoubleClick = (e: React.MouseEvent<HTMLInputElement>) => {
+
+    e.preventDefault();
+
+    selectAllInSearch(e.currentTarget);
 
   };
 
@@ -426,6 +537,14 @@ export function StrongsPanel() {
             value={query}
 
             onChange={(e) => setQuery(e.target.value)}
+
+            onMouseDown={onSearchMouseDown}
+
+            onFocus={onSearchFocus}
+
+            onBlur={onSearchBlur}
+
+            onDoubleClick={onSearchDoubleClick}
 
             placeholder="G2316, H7225, or God"
 

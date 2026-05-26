@@ -104,7 +104,7 @@ export default function AtlasPage() {
   }, [hover]);
 
   return (
-    <main className="flex h-dvh w-dvw flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
+    <main className="flex h-full min-h-0 w-full flex-col bg-[var(--color-paper)] text-[var(--color-ink)]">
       <header className="flex items-center justify-between border-b border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-2">
         <div className="flex items-baseline gap-3">
           <Link

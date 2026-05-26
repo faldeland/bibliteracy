@@ -1,4 +1,6 @@
-/** True when the browser bundle includes a LiveKit WebSocket URL. */
+import { isLiveKitPublicUrlConfigured } from "@/lib/lounge/livekitEnv";
+
+/** True when the browser bundle includes a real LiveKit WebSocket URL. */
 export function isLiveKitConfigured(): boolean {
-  return !!process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  return isLiveKitPublicUrlConfigured();
 }

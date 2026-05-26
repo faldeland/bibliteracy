@@ -60,6 +60,19 @@ To turn it on for a deployment:
    missing those URLs — mirror `supabase/config.toml` with
    `npx supabase config push --linked` or paste the entries manually.
 
+### Live video (LiveKit on Vercel)
+
+The lounge and dot live rooms need three variables in **Vercel → Project
+Settings → Environment Variables** (Production, and Preview if you use it):
+
+- `NEXT_PUBLIC_LIVEKIT_URL` — WebSocket URL from [cloud.livekit.io](https://cloud.livekit.io)
+- `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` — from the same project’s API keys
+
+Copy the values from your local `.env.local` (do not commit that file). After
+adding or changing `NEXT_PUBLIC_*`, **redeploy** so the build picks up the
+public URL. Optional server-only alias: `LIVEKIT_URL` (same `wss://…` value)
+if you prefer not to duplicate the URL under two names.
+
 For the local Supabase stack, set these in `supabase/config.toml` (or env
 vars) before `npm run db:start`:
 

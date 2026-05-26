@@ -4,6 +4,7 @@ import {
   clampSubdivisions,
   computeSortOrderForMove,
   rowToTimeline,
+  stepTimelineHeightPreset,
   TIMELINE_APPEARANCE_DEFAULTS,
   type Timeline,
 } from "@/lib/grid/timelinesApi";
@@ -94,6 +95,20 @@ describe("clampAnchor", () => {
     expect(clampAnchor(Number.NaN)).toBe(
       TIMELINE_APPEARANCE_DEFAULTS.verticalAnchor,
     );
+  });
+});
+
+describe("stepTimelineHeightPreset", () => {
+  it("steps through compact → normal → tall", () => {
+    expect(stepTimelineHeightPreset("compact", 1)).toBe("normal");
+    expect(stepTimelineHeightPreset("normal", 1)).toBe("tall");
+    expect(stepTimelineHeightPreset("tall", -1)).toBe("normal");
+    expect(stepTimelineHeightPreset("normal", -1)).toBe("compact");
+  });
+
+  it("clamps at the ends", () => {
+    expect(stepTimelineHeightPreset("compact", -1)).toBe("compact");
+    expect(stepTimelineHeightPreset("tall", 1)).toBe("tall");
   });
 });
 

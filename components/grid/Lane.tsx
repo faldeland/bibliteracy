@@ -15,7 +15,10 @@ import { useNow } from "@/lib/grid/useNow";
 import { cn } from "@/lib/utils";
 import type { Dot } from "@/lib/grid/types";
 import type { Timeline } from "@/lib/grid/timelinesApi";
-import { TIMELINE_HEIGHT_PX } from "@/lib/grid/timelinesApi";
+import {
+  stepTimelineHeightPreset,
+  TIMELINE_HEIGHT_PX,
+} from "@/lib/grid/timelinesApi";
 
 interface LaneProps {
   timeline: Timeline;
@@ -28,6 +31,7 @@ interface LaneProps {
   onRename?: (id: string, name: string) => void;
   onDelete?: (timeline: Timeline) => void;
   onOpenSettings?: (timeline: Timeline) => void;
+  onAdjustHeight?: (timeline: Timeline, delta: -1 | 1) => void;
   // Drag-reorder hooks. GridCanvas owns the dragging id and computes drop
   // positions; Lane just wires the DOM events.
   isDragging?: boolean;
@@ -57,6 +61,7 @@ export function Lane({
   onRename,
   onDelete,
   onOpenSettings,
+  onAdjustHeight,
   isDragging,
   isDropTarget,
   laneIndex,
@@ -222,6 +227,7 @@ export function Lane({
         onRename={onRename}
         onDelete={onDelete}
         onOpenSettings={onOpenSettings}
+        onAdjustHeight={onAdjustHeight}
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       />
@@ -311,6 +317,7 @@ function LaneHeader({
   onRename,
   onDelete,
   onOpenSettings,
+  onAdjustHeight,
   onDragStart,
   onDragEnd,
 }: {
@@ -319,9 +326,18 @@ function LaneHeader({
   onRename?: (id: string, name: string) => void;
   onDelete?: (timeline: Timeline) => void;
   onOpenSettings?: (timeline: Timeline) => void;
+  onAdjustHeight?: (timeline: Timeline, delta: -1 | 1) => void;
   onDragStart?: (timelineId: string) => void;
   onDragEnd?: () => void;
 }) {
+  const heightPx = TIMELINE_HEIGHT_PX[timeline.heightPreset];
+  const canShrink =
+    onAdjustHeight &&
+    stepTimelineHeightPreset(timeline.heightPreset, -1) !==
+      timeline.heightPreset;
+  const canGrow =
+    onAdjustHeight &&
+    stepTimelineHeightPreset(timeline.heightPreset, 1) !== timeline.heightPreset;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(timeline.name);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -403,11 +419,39 @@ function LaneHeader({
         </button>
       )}
 
+      {onAdjustHeight && !editing && (
+        <>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onAdjustHeight(timeline, -1)}
+            disabled={!canShrink}
+            className="ml-0.5 rounded-full px-1 text-[12px] font-bold leading-none text-[var(--color-ink-2)]/60 hover:bg-black/10 hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-30"
+            aria-label={`Decrease ${timeline.name} row height`}
+            title={`Decrease row height (${heightPx}px)`}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => onAdjustHeight(timeline, 1)}
+            disabled={!canGrow}
+            className="rounded-full px-1 text-[12px] font-bold leading-none text-[var(--color-ink-2)]/60 hover:bg-black/10 hover:text-[var(--color-ink)] disabled:cursor-not-allowed disabled:opacity-30"
+            aria-label={`Increase ${timeline.name} row height`}
+            title={`Increase row height (${heightPx}px)`}
+          >
+            +
+          </button>
+        </>
+      )}
+
       {/* Settings button — opens the configuration sheet. Available on all
           lanes (built-in and custom) since appearance is fully editable. */}
       {onOpenSettings && !editing && (
         <button
           type="button"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={() => onOpenSettings(timeline)}
           className="ml-0.5 rounded-full px-1 text-[14px] leading-none text-[var(--color-ink-2)]/60 hover:bg-black/10 hover:text-[var(--color-ink)]"
           aria-label={`Configure ${timeline.name} timeline`}

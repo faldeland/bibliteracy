@@ -23,7 +23,7 @@ export interface GridState {
    */
   currentBibleRef: BibleRef | null;
   /**
-   * Strong's number hovered or open in a word-study popover in BibleReader.
+   * Strong's number selected or open in a word-study popover in BibleReader.
    * Drives the xref band (Strong's occurrence mode). Ephemeral — see `pinnedStrong`.
    */
   highlightStrong: string | null;
