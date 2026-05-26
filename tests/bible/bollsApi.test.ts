@@ -5,6 +5,7 @@ import {
   fetchChapter,
   parseVerseTokens,
   pickShortGloss,
+  searchDictionaryMatches,
   type BollsDictRow,
 } from "@/lib/bible/bollsApi";
 import { BIBLE_BOOKS } from "@/lib/bible/books";
@@ -206,6 +207,54 @@ describe("pickShortGloss", () => {
 
   it("returns an em-dash when there's truly nothing to gloss", () => {
     expect(pickShortGloss(row({}))).toBe("—");
+  });
+});
+
+describe("searchDictionaryMatches", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns Strong's hits sorted by weight and deduped by topic", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json([
+          row({
+            topic: "G2316",
+            lexeme: "θεός",
+            transliteration: "theos",
+            weight: 0.9,
+            definition: 'Strongs: <i>God</i>',
+          }),
+          row({
+            topic: "G2316",
+            lexeme: "θεός",
+            weight: 0.5,
+          }),
+          row({
+            topic: "G5207",
+            lexeme: "υἱός",
+            transliteration: "huios",
+            weight: 0.4,
+            definition: 'Strongs: <i>son</i>',
+          }),
+          row({ topic: "invalid", weight: 1 }),
+        ]),
+      ),
+    );
+
+    const hits = await searchDictionaryMatches("god");
+    expect(hits.map((h) => h.strong)).toEqual(["G2316", "G5207"]);
+    expect(hits[0]!.shortGloss).toBe("God");
+  });
+
+  it("returns empty array when upstream fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 404 })),
+    );
+    expect(await searchDictionaryMatches("zzz")).toEqual([]);
   });
 });
 

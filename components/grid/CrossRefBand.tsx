@@ -9,8 +9,16 @@ import {
   type VerseCrossRefSpokeHover,
 } from "@/components/bible/VerseCrossRefSpokes";
 import { BibleStripActiveVerse } from "@/components/bible/BibleStripActiveVerse";
+import {
+  StrongsVerseDots,
+  type StrongsVerseDotHover,
+} from "@/components/bible/StrongsVerseDots";
+import { VerseHoverCard } from "@/components/bible/VerseHoverCard";
 import { bookById } from "@/lib/bible/books";
+import { EMPTY_VERSE_INDICES } from "@/lib/bible/emptyIndices";
+import { verseFromIndex } from "@/lib/bible/globalVerseIndex";
 import { useStableVerseIndex } from "@/lib/bible/useStableVerseIndex";
+import { loadStrongsOccurrences } from "@/lib/bible/strongsClient";
 import {
   DEFAULT_XREF_VARIANT,
   countVerseCrossRefs,
@@ -28,6 +36,9 @@ import {
 
 /** @deprecated Use BIBLE_STRIP_BAND_HEIGHT — kept for existing imports. */
 export const CROSS_REF_SPOKE_HEIGHT = BIBLE_STRIP_BAND_HEIGHT;
+
+/** @deprecated Merged into CrossRefBand — use BIBLE_STRIP_BAND_HEIGHT. */
+export { BIBLE_STRIP_BAND_HEIGHT as STRONGS_FOUND_BAND_HEIGHT } from "@/lib/grid/bibleStripBand";
 
 const XREF_TOOLTIP_MIN_WIDTH = 180;
 const VIEWPORT_PAD = 8;
@@ -52,8 +63,8 @@ function orderedRefs(
 }
 
 /**
- * Cross-reference spokes for the active BibleReader verse. Sits above
- * BooksLane; the spoke baseline aligns with the bottom edge of this band.
+ * Bible strip above BooksLane: cross-reference spokes for the active verse,
+ * plus KJV occurrence dots when a Strong's number is hovered or pinned.
  */
 export function CrossRefBand() {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -61,10 +72,19 @@ export function CrossRefBand() {
   const [width, setWidth] = useState(0);
   const [pairs, setPairs] = useState<Uint32Array | null>(null);
   const [xrefCount, setXrefCount] = useState(0);
+  const [strongIndices, setStrongIndices] =
+    useState<Uint32Array>(EMPTY_VERSE_INDICES);
+  const [strongCount, setStrongCount] = useState(0);
+  const [strongLoading, setStrongLoading] = useState(false);
   const [hoverSpoke, setHoverSpoke] = useState<VerseCrossRefSpoke | null>(
     null,
   );
   const [hoverPointer, setHoverPointer] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [hoverDot, setHoverDot] = useState<StrongsVerseDotHover | null>(null);
+  const [dotTooltipAnchor, setDotTooltipAnchor] = useState<{
     x: number;
     y: number;
   } | null>(null);
@@ -74,8 +94,16 @@ export function CrossRefBand() {
   const [detailSpoke, setDetailSpoke] = useState<VerseCrossRefSpoke | null>(
     null,
   );
+
+  const highlightStrong = useGridStore((s) => s.highlightStrong);
+  const pinnedStrong = useGridStore((s) => s.pinnedStrong);
+  const setPinnedStrong = useGridStore((s) => s.setPinnedStrong);
+  const activeStrong = pinnedStrong ?? highlightStrong;
+  const showStrongDots = !!activeStrong;
+
   const translationId = useGridStore((s) => s.bibleTranslationId);
   const currentBibleRef = useGridStore((s) => s.currentBibleRef);
+  const navigateBible = useGridStore((s) => s.navigateBible);
 
   const handleSpokeHover = useCallback((info: VerseCrossRefSpokeHover | null) => {
     if (!info) {
@@ -88,6 +116,41 @@ export function CrossRefBand() {
   }, []);
 
   const displayVerseIndex = useStableVerseIndex(currentBibleRef);
+
+  const hoverVerseRef = useMemo((): VerseRef | null => {
+    if (!hoverDot) return null;
+    const ref = verseFromIndex(hoverDot.verseIndex);
+    if (!ref) return null;
+    return { book: ref.book, chapter: ref.chapter, verse: ref.verse };
+  }, [hoverDot]);
+
+  const handleStrongVerseClick = useCallback(
+    (verseIdx: number) => {
+      const ref = verseFromIndex(verseIdx);
+      if (!ref) return;
+      if (activeStrong) setPinnedStrong(activeStrong);
+      navigateBible({
+        book: ref.book,
+        chapter: ref.chapter,
+        verseStart: ref.verse,
+      });
+    },
+    [activeStrong, navigateBible, setPinnedStrong],
+  );
+
+  const updateDotTooltipAnchor = useCallback(
+    (dot: StrongsVerseDotHover | null) => {
+      setHoverDot(dot);
+      const host = trackRef.current;
+      if (!dot || !host) {
+        setDotTooltipAnchor(null);
+        return;
+      }
+      const rect = host.getBoundingClientRect();
+      setDotTooltipAnchor({ x: rect.left + dot.x, y: rect.top });
+    },
+    [],
+  );
 
   useEffect(() => {
     const el = trackRef.current;
@@ -121,6 +184,37 @@ export function CrossRefBand() {
     setXrefCount(countVerseCrossRefs(pairs, displayVerseIndex));
   }, [displayVerseIndex, pairs]);
 
+  useEffect(() => {
+    if (!activeStrong) {
+      setStrongIndices(EMPTY_VERSE_INDICES);
+      setStrongCount(0);
+      setStrongLoading(false);
+      setHoverDot(null);
+      setDotTooltipAnchor(null);
+      return;
+    }
+    let alive = true;
+    setStrongLoading(true);
+    setHoverDot(null);
+    setDotTooltipAnchor(null);
+    loadStrongsOccurrences(activeStrong)
+      .then((data) => {
+        if (!alive) return;
+        setStrongIndices(data.indices);
+        setStrongCount(data.count);
+        setStrongLoading(false);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setStrongIndices(EMPTY_VERSE_INDICES);
+        setStrongCount(0);
+        setStrongLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [activeStrong]);
+
   const tooltip = useMemo(() => {
     if (!hoverSpoke || displayVerseIndex == null) return null;
     const { from, to } = orderedRefs(hoverSpoke, displayVerseIndex);
@@ -149,22 +243,70 @@ export function CrossRefBand() {
       })()
     : "";
 
+  const labelText = useMemo(() => {
+    const xrefPart = `${xrefCount} xref${xrefCount === 1 ? "" : "s"}`;
+    if (!showStrongDots) {
+      return `${xrefPart}${refLabel ? ` · ${refLabel}` : ""}`;
+    }
+    let strongPart: string;
+    if (strongLoading) strongPart = `${activeStrong} · …`;
+    else if (strongCount === 0) strongPart = `${activeStrong} · none`;
+    else {
+      strongPart = `${strongCount.toLocaleString()} verse${strongCount === 1 ? "" : "s"} · ${activeStrong}`;
+    }
+    return `${xrefPart} · ${strongPart}`;
+  }, [
+    showStrongDots,
+    strongLoading,
+    strongCount,
+    activeStrong,
+    xrefCount,
+    refLabel,
+  ]);
+
+  const trackMessage = useMemo(() => {
+    if (showStrongDots && strongLoading && xrefCount === 0) {
+      return "Loading occurrences…";
+    }
+    if (
+      displayVerseIndex != null &&
+      xrefCount === 0 &&
+      pairs &&
+      !showStrongDots
+    ) {
+      return "No cross-references for this verse";
+    }
+    if (
+      showStrongDots &&
+      strongCount === 0 &&
+      !strongLoading &&
+      xrefCount === 0
+    ) {
+      return "No KJV occurrences for this Strong's number";
+    }
+    return null;
+  }, [
+    showStrongDots,
+    strongLoading,
+    strongCount,
+    displayVerseIndex,
+    xrefCount,
+    pairs,
+  ]);
+
   return (
     <>
       <div
         ref={hostRef}
         className={bibleStripBandClassName}
         style={bibleStripBandStyle()}
-        aria-label="Cross-references"
+        aria-label="Cross-references and Strong's occurrences"
       >
         <div
           className="pointer-events-none absolute inset-x-2 top-0 z-10 flex items-center overflow-hidden text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]"
           style={{ height: BIBLE_STRIP_LABEL_ROW_PX }}
         >
-          <span className="truncate">
-            {xrefCount} xref{xrefCount === 1 ? "" : "s"}
-            {refLabel ? ` · ${refLabel}` : ""}
-          </span>
+          <span className="truncate">{labelText || refLabel || "\u00a0"}</span>
         </div>
 
         <div
@@ -179,24 +321,39 @@ export function CrossRefBand() {
               activeIdx={displayVerseIndex}
             />
           )}
-          {width > 0 && pairs && displayVerseIndex != null && xrefCount > 0 && (
-            <VerseCrossRefSpokes
+
+          {width > 0 &&
+            pairs &&
+            displayVerseIndex != null &&
+            xrefCount > 0 && (
+              <VerseCrossRefSpokes
+                width={width}
+                height={BIBLE_STRIP_TRACK_HEIGHT_PX}
+                activeIdx={displayVerseIndex}
+                pairs={pairs}
+                onHover={handleSpokeHover}
+                onClick={(spoke) => {
+                  setClickedSpoke(spoke);
+                  setHoverSpoke(null);
+                  setHoverPointer(null);
+                }}
+              />
+            )}
+
+          {width > 0 && showStrongDots && (
+            <StrongsVerseDots
               width={width}
               height={BIBLE_STRIP_TRACK_HEIGHT_PX}
-              activeIdx={displayVerseIndex}
-              pairs={pairs}
-              onHover={handleSpokeHover}
-              onClick={(spoke) => {
-                setClickedSpoke(spoke);
-                setHoverSpoke(null);
-                setHoverPointer(null);
-              }}
+              xMode="word"
+              indices={strongIndices}
+              onHover={updateDotTooltipAnchor}
+              onVerseClick={handleStrongVerseClick}
             />
           )}
 
-          {displayVerseIndex != null && xrefCount === 0 && pairs && (
+          {trackMessage && (
             <div className="pointer-events-none absolute inset-0 z-[1] flex items-center justify-center text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]/90">
-              No cross-references for this verse
+              {trackMessage}
             </div>
           )}
         </div>
@@ -264,6 +421,14 @@ export function CrossRefBand() {
           />
         )}
       </div>
+
+      {hoverVerseRef && dotTooltipAnchor && (
+        <VerseHoverCard
+          ref_={hoverVerseRef}
+          translationId={translationId}
+          viewportAnchor={dotTooltipAnchor}
+        />
+      )}
 
       <CrossRefDetailSheet
         from={detailRefs?.from ?? null}

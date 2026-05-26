@@ -33,5 +33,11 @@ export function useLiveKitToken(roomName: string, displayName?: string) {
     };
   }, [roomName, displayName]);
 
-  return { token, serverUrl, error, ready: !!token && !!serverUrl };
+  return {
+    token,
+    serverUrl,
+    error,
+    ready: !!token && !!serverUrl,
+    loading: !error && (!token || !serverUrl),
+  };
 }

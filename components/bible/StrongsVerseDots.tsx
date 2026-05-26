@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { makeXMapper, type XAxisMode } from "@/lib/bible/bibleXAxis";
 import {
   hitTestStrongsVerseDot,
-  STRONGS_DOT_BASELINE_INSET,
+  STRONGS_DOT_ROW_HEIGHT_PX,
+  strongsVerseDotY,
 } from "@/lib/bible/strongsVerseDotHitTest";
 
 const PIXEL_RATIO_CAP = 2;
 const DOT_ALPHA = 0.42;
-const DOT_SIZE = 2;
+const DOT_SIZE = 3;
 export interface StrongsVerseDotHover {
   verseIndex: number;
   /** Local x within the band (px). */
@@ -58,7 +59,7 @@ export function StrongsVerseDots({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const baseline = height - STRONGS_DOT_BASELINE_INSET;
+    const dotY = strongsVerseDotY(height);
     const half = DOT_SIZE / 2;
 
     ctx.fillStyle = "var(--color-ink)";
@@ -67,7 +68,7 @@ export function StrongsVerseDots({
       const idx = indices[i]!;
       const x = xOf(idx);
       ctx.globalAlpha = DOT_ALPHA;
-      ctx.fillRect(x - half, baseline - half, DOT_SIZE, DOT_SIZE);
+      ctx.fillRect(x - half, dotY - half, DOT_SIZE, DOT_SIZE);
     }
   }, [width, height, indices, xOf]);
 
@@ -125,22 +126,24 @@ export function StrongsVerseDots({
 
   return (
     <div
-      ref={hostRef}
-      className={
-        interactive
-          ? "absolute inset-0 cursor-pointer"
-          : "absolute inset-0"
-      }
+      className="pointer-events-none absolute inset-0 z-20"
       style={{ width, height }}
-      onPointerMove={onHover ? onPointerMove : undefined}
-      onPointerLeave={onHover ? onPointerLeave : undefined}
-      onClick={onVerseClick ? onClick : undefined}
     >
       <canvas
         ref={canvasRef}
         className="pointer-events-none absolute inset-0"
         aria-hidden
       />
+      {interactive && (
+        <div
+          ref={hostRef}
+          className="pointer-events-auto absolute inset-x-0 top-0 cursor-pointer"
+          style={{ height: STRONGS_DOT_ROW_HEIGHT_PX }}
+          onPointerMove={onPointerMove}
+          onPointerLeave={onPointerLeave}
+          onClick={onClick}
+        />
+      )}
     </div>
   );
 }

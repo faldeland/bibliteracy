@@ -1,8 +1,20 @@
-/** Vertical inset from band bottom — matches StrongsVerseDots baseline. */
+/** Vertical inset from band bottom — xref spokes and active-verse dot. */
 export const STRONGS_DOT_BASELINE_INSET = 2;
+
+/** Vertical inset from band top — Strong's occurrence dot row. */
+export const STRONGS_DOT_TOP_INSET = 2;
 
 const DEFAULT_HIT_RADIUS_PX = 8;
 const DEFAULT_VERTICAL_TOLERANCE_PX = 10;
+
+/** Height of the pointer-hit row at the top of the strip track. */
+export const STRONGS_DOT_ROW_HEIGHT_PX =
+  STRONGS_DOT_TOP_INSET + DEFAULT_VERTICAL_TOLERANCE_PX + 2;
+
+/** Y position for Strong's occurrence dots (near top of strip track). */
+export function strongsVerseDotY(_trackHeightPx: number): number {
+  return STRONGS_DOT_TOP_INSET;
+}
 
 /**
  * Find the verse index under `(localX, localY)` on the Strong's occurrence strip.
@@ -23,8 +35,8 @@ export function hitTestStrongsVerseDot(
   const hitRadius = options?.hitRadiusPx ?? DEFAULT_HIT_RADIUS_PX;
   const verticalTol =
     options?.verticalTolerancePx ?? DEFAULT_VERTICAL_TOLERANCE_PX;
-  const baseline = height - STRONGS_DOT_BASELINE_INSET;
-  if (Math.abs(localY - baseline) > verticalTol) return null;
+  const dotY = strongsVerseDotY(height);
+  if (Math.abs(localY - dotY) > verticalTol) return null;
 
   let lo = 0;
   let hi = indices.length;

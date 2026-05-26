@@ -1,14 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { isLiveKitConfigured } from "@/lib/lounge/env";
+import { useLoungeBarHeight } from "@/lib/lounge/useLoungeBarHeight";
 import { useLounge } from "./LoungeProvider";
+import { LoungeBarResizeHandle } from "./LoungeBarResizeHandle";
 import { LoungeVideoRoom } from "./LoungeVideoRoom";
 import { LoungeInvitePanel } from "./LoungeInvitePanel";
 
-/** Height reserved above page content when the lounge bar is open. */
-export const LOUNGE_BAR_HEIGHT_PX = 120;
+const loungeBarLabelClass =
+  "inline-flex h-6 items-center gap-1.5 text-[10px] font-semibold uppercase leading-none tracking-widest text-white/90";
+
+const loungeBarActionClass =
+  "inline-flex h-6 shrink-0 cursor-pointer items-center justify-center rounded border-0 bg-transparent px-2 text-[10px] font-semibold uppercase leading-none tracking-widest text-white/80 hover:bg-white/10";
 
 export function LoungeStreamBar() {
   const {
@@ -20,7 +25,9 @@ export function LoungeStreamBar() {
     setActiveHostRoom,
     disable,
   } = useLounge();
+  const { tileHeight, barHeight, resizeBar } = useLoungeBarHeight();
   const [showInvite, setShowInvite] = useState(false);
+  const inviteAnchorRef = useRef<HTMLButtonElement>(null);
 
   if (!enabled) return null;
 
@@ -30,16 +37,16 @@ export function LoungeStreamBar() {
 
   return (
     <div
-      className="shrink-0 border-b border-white/10 bg-[var(--color-ink)] text-white"
-      style={{ height: LOUNGE_BAR_HEIGHT_PX }}
+      className="shrink-0 overflow-visible border-b border-white/10 bg-[var(--color-ink)] text-white"
+      style={{ height: barHeight }}
       role="region"
       aria-label="Lounge live stream"
     >
-      <div className="flex h-full flex-col">
-        <div className="flex items-center justify-between gap-2 px-3 py-1">
+      <div className="flex h-full min-h-0 flex-col overflow-hidden">
+        <div className="relative z-30 flex h-8 shrink-0 items-center justify-between gap-2 overflow-visible px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-white/90">
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-red-500" />
+            <span className={loungeBarLabelClass}>
+              <span className="inline-block h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-red-500" />
               Lounge
             </span>
             {session?.hostLounges && session.hostLounges.length > 0 && (
@@ -61,31 +68,35 @@ export function LoungeStreamBar() {
               </select>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex h-6 shrink-0 items-center gap-1">
             {isOwnLounge && (
-              <div className="relative">
+              <>
                 <button
+                  ref={inviteAnchorRef}
                   type="button"
                   onClick={() => setShowInvite((v) => !v)}
-                  className="rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-white/80 hover:bg-white/10"
+                  className={loungeBarActionClass}
+                  aria-expanded={showInvite}
                 >
                   Invite
                 </button>
-                {showInvite && (
-                  <LoungeInvitePanel onClose={() => setShowInvite(false)} />
-                )}
-              </div>
+                <LoungeInvitePanel
+                  anchorRef={inviteAnchorRef}
+                  open={showInvite}
+                  onClose={() => setShowInvite(false)}
+                />
+              </>
             )}
             <Link
               href="/settings"
-              className="hidden rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-white/60 hover:bg-white/10 sm:inline"
+              className={`max-sm:hidden ${loungeBarActionClass}`}
             >
               Guests
             </Link>
             <button
               type="button"
               onClick={disable}
-              className="rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-white/60 hover:bg-white/10"
+              className={loungeBarActionClass}
               title="Leave lounge and hide the stream bar"
             >
               End
@@ -93,7 +104,10 @@ export function LoungeStreamBar() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1">
+        <div
+          className="relative z-10 min-h-0 flex-1 overflow-x-hidden overflow-y-visible"
+          style={{ minHeight: tileHeight + 8 }}
+        >
           {sessionLoading && (
             <div className="flex h-full items-center px-3 text-xs text-white/50">
               Loading lounge…
@@ -110,6 +124,7 @@ export function LoungeStreamBar() {
               roomName={activeRoomName}
               displayName={activeDisplayName ?? undefined}
               layout="bar"
+              tileHeightPx={tileHeight}
             />
           )}
           {!sessionLoading && livekitOk && !activeRoomName && (
@@ -118,6 +133,7 @@ export function LoungeStreamBar() {
             </div>
           )}
         </div>
+        <LoungeBarResizeHandle onResize={resizeBar} />
       </div>
     </div>
   );

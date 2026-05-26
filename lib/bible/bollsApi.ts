@@ -349,3 +349,46 @@ export async function fetchWordStudies(
   }
   return out;
 }
+
+const STRONG_TOPIC_RE = /^[GH]\d+$/;
+
+/**
+ * Reverse dictionary lookup (English word, transliteration, or lemma) via
+ * bolls.life BDBT. Results are sorted by match weight (best first).
+ */
+export async function searchDictionaryMatches(
+  query: string,
+): Promise<WordStudy[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const url = `${BASE}/dictionary-definition/BDBT/${encodeURIComponent(trimmed)}/?extended=true`;
+  const res = await fetch(url, {
+    next: { revalidate: 60 * 60 * 24 },
+    headers: { accept: "application/json" },
+  });
+  if (!res.ok) return [];
+
+  const rows = (await res.json()) as BollsDictRow[];
+  const seen = new Set<string>();
+  const out: WordStudy[] = [];
+
+  for (const row of rows.sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))) {
+    const strong = row.topic?.trim() ?? "";
+    if (!STRONG_TOPIC_RE.test(strong) || seen.has(strong)) continue;
+    seen.add(strong);
+    const study: WordStudy = {
+      strong,
+      lexeme: row.lexeme ?? "",
+      transliteration: row.transliteration ?? "",
+      pronunciation: row.pronunciation ?? "",
+      shortGloss: pickShortGloss(row),
+      detailHtml: row.definition ?? "",
+    };
+    dictCache.set(strong, study);
+    out.push(study);
+    if (out.length >= 100) break;
+  }
+
+  return out;
+}

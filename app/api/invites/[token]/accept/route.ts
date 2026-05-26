@@ -9,6 +9,7 @@ export async function POST(
 ) {
   const { token } = await context.params;
   const origin = new URL(request.url).origin;
+  const inviteUrl = `${origin}/invite/${token}`;
 
   const supabase = await createClient();
   const {
@@ -20,20 +21,20 @@ export async function POST(
     });
   }
 
-  const { data: invite } = await supabase
-    .from("invites")
-    .select("id, owner_id, accepted_by")
-    .eq("token", token)
-    .maybeSingle();
+  // Mark accepted + create guest link through SECURITY DEFINER RPC.
+  const { error } = await supabase.rpc("accept_invite", { p_token: token });
 
-  if (!invite || (invite.accepted_by && invite.accepted_by !== user.id)) {
-    return NextResponse.redirect(`${origin}/invite/${token}`, { status: 303 });
+  if (error) {
+    const message = error.message.toLowerCase();
+    const errorCode = message.includes("already used")
+      ? "already_used"
+      : message.includes("cannot accept your own invite")
+        ? "own_invite"
+        : message.includes("must be signed in")
+          ? "must_sign_in"
+          : "invalid";
+    return NextResponse.redirect(`${inviteUrl}?error=${errorCode}`, { status: 303 });
   }
 
-  // Mark accepted + create guests row. We rely on invites RLS allowing the
-  // owner only; for the recipient to mark accepted_by themselves we use a
-  // service-role flow in production. For MVP, expose a SECURITY DEFINER fn:
-  await supabase.rpc("accept_invite", { p_token: token });
-
-  return NextResponse.redirect(`${origin}/invite/${token}`, { status: 303 });
+  return NextResponse.redirect(inviteUrl, { status: 303 });
 }

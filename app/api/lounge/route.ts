@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { ensureLoungeRoom } from "@/lib/lounge/ensureLoungeRoom";
+import { isLiveKitServerConfigured } from "@/lib/lounge/livekitEnv";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -26,15 +28,13 @@ export async function GET() {
     .eq("user_id", user.id)
     .maybeSingle();
 
-  const { data: ownLounge } = await supabase
-    .from("rooms")
-    .select("livekit_room_name")
-    .eq("owner_id", user.id)
-    .eq("kind", "lounge")
-    .maybeSingle();
-
-  const roomName =
-    ownLounge?.livekit_room_name ?? `lounge_${user.id.replace(/-/g, "")}`;
+  let roomName: string;
+  try {
+    roomName = await ensureLoungeRoom(supabase, user.id);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Failed to ensure lounge room";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 
   const displayName = profile?.display_name ?? user.email ?? "Friend";
 
@@ -71,10 +71,7 @@ export async function GET() {
     }
   }
 
-  const livekitConfigured =
-    !!process.env.LIVEKIT_API_KEY &&
-    !!process.env.LIVEKIT_API_SECRET &&
-    !!process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  const livekitConfigured = isLiveKitServerConfigured();
 
   return NextResponse.json({
     roomName,

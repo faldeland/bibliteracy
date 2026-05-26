@@ -24,19 +24,19 @@ export interface GridState {
   currentBibleRef: BibleRef | null;
   /**
    * Strong's number hovered or open in a word-study popover in BibleReader.
-   * Drives the FOUND band above BooksLane. Ephemeral — see `pinnedStrong`.
+   * Drives the xref band (Strong's occurrence mode). Ephemeral — see `pinnedStrong`.
    */
   highlightStrong: string | null;
   /**
    * Strong's number locked while studying (survives verse navigation, e.g.
-   * clicking occurrence dots in the FOUND band).
+   * clicking occurrence dots in the xref band).
    */
   pinnedStrong: string | null;
   /** Translation selected in BibleReader (synced from localStorage). */
   bibleTranslationId: string;
   /**
    * Monotonic counter bumped by `navigateBible` so BibleReader can react to
-   * navigation requests from sibling UI (e.g. FOUND band dots).
+   * navigation requests from sibling UI (e.g. xref band occurrence dots).
    */
   bibleNavigationSeq: number;
   /** Target for the latest `navigateBible` call. */

@@ -7,10 +7,13 @@ export const dynamic = "force-dynamic";
 
 export default async function InvitePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ token: string }>;
+  searchParams: Promise<{ error?: string }>;
 }) {
   const { token } = await params;
+  const { error: errorCode } = await searchParams;
 
   if (!isSupabaseConfigured()) {
     return (
@@ -26,9 +29,17 @@ export default async function InvitePage({
 
   const supabase = await createClient();
 
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect(`/login?next=/invite/${token}`);
+  }
+
   const { data: invite } = await supabase
     .from("invites")
-    .select("id, owner_id, email, accepted_by, accepted_at")
+    .select("id, owner_id, accepted_by")
     .eq("token", token)
     .maybeSingle();
 
@@ -37,18 +48,10 @@ export default async function InvitePage({
       <Centered>
         <h1 className="font-serif text-2xl">Invite not found</h1>
         <p className="mt-2 text-sm text-[var(--color-ink-2)]">
-          This link is invalid or has been revoked.
+          This link is invalid, has been revoked, or is for a different email.
         </p>
       </Centered>
     );
-  }
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    redirect(`/login?next=/invite/${token}`);
   }
 
   // Already accepted? Show success.
@@ -74,6 +77,17 @@ export default async function InvitePage({
     .eq("user_id", invite.owner_id)
     .maybeSingle();
 
+  const errorMessage =
+    errorCode === "already_used"
+      ? "This invite was already claimed by another account."
+      : errorCode === "own_invite"
+        ? "You can't accept your own invite from this account."
+        : errorCode === "invalid"
+          ? "This link is invalid or has been revoked."
+          : errorCode === "must_sign_in"
+            ? "Please sign in to accept this invite."
+            : null;
+
   return (
     <Centered>
       <h1 className="font-serif text-2xl">You&apos;re invited</h1>
@@ -82,6 +96,11 @@ export default async function InvitePage({
         guests-only Logos, Prayer, and Discipleship dots, and to join their
         always-on lounge.
       </p>
+      {errorMessage ? (
+        <p className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {errorMessage}
+        </p>
+      ) : null}
       <form action={`/api/invites/${token}/accept`} method="post" className="mt-6">
         <button
           type="submit"

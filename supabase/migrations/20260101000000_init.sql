@@ -235,6 +235,14 @@ drop policy if exists invites_owner_all on public.invites;
 create policy invites_owner_all on public.invites
   for all using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
 
+-- invite recipients can read their own pending invite by token.
+drop policy if exists invites_recipient_select on public.invites;
+create policy invites_recipient_select on public.invites
+  for select using (
+    auth.uid() is not null
+    and lower(email) = lower(coalesce((auth.jwt() ->> 'email'), ''))
+  );
+
 -- dots: visibility-based read; owner full write.
 drop policy if exists dots_select on public.dots;
 create policy dots_select on public.dots

@@ -1,19 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { makeXMapper } from "@/lib/bible/bibleXAxis";
 import { verseIndex } from "@/lib/bible/globalVerseIndex";
-import { hitTestStrongsVerseDot } from "@/lib/bible/strongsVerseDotHitTest";
+import {
+  hitTestStrongsVerseDot,
+  STRONGS_DOT_TOP_INSET,
+  strongsVerseDotY,
+} from "@/lib/bible/strongsVerseDotHitTest";
 
 describe("hitTestStrongsVerseDot", () => {
   const width = 1000;
   const height = 24;
   const xOf = makeXMapper(width, "word");
 
-  it("returns null when pointer is far from the baseline", () => {
+  it("returns null when pointer is far from the dot row", () => {
     const gen = verseIndex("Gen", 1, 1)!;
     const jhn = verseIndex("Jhn", 3, 16)!;
     const indices = new Uint32Array([gen, jhn]);
     expect(
-      hitTestStrongsVerseDot(xOf(gen), 0, width, height, indices, xOf),
+      hitTestStrongsVerseDot(
+        xOf(gen),
+        height - 2,
+        width,
+        height,
+        indices,
+        xOf,
+      ),
     ).toBeNull();
   });
 
@@ -21,11 +32,11 @@ describe("hitTestStrongsVerseDot", () => {
     const gen = verseIndex("Gen", 1, 1)!;
     const jhn = verseIndex("Jhn", 3, 16)!;
     const indices = new Uint32Array([gen, jhn]);
-    const baseline = height - 2;
+    expect(strongsVerseDotY(height)).toBe(STRONGS_DOT_TOP_INSET);
     expect(
       hitTestStrongsVerseDot(
         xOf(jhn),
-        baseline,
+        STRONGS_DOT_TOP_INSET,
         width,
         height,
         indices,
@@ -35,7 +46,7 @@ describe("hitTestStrongsVerseDot", () => {
     expect(
       hitTestStrongsVerseDot(
         xOf(gen),
-        baseline,
+        STRONGS_DOT_TOP_INSET,
         width,
         height,
         indices,
@@ -47,11 +58,10 @@ describe("hitTestStrongsVerseDot", () => {
   it("returns null when horizontal distance exceeds hit radius", () => {
     const gen = verseIndex("Gen", 1, 1)!;
     const indices = new Uint32Array([gen]);
-    const baseline = height - 2;
     expect(
       hitTestStrongsVerseDot(
         xOf(gen) + 50,
-        baseline,
+        STRONGS_DOT_TOP_INSET,
         width,
         height,
         indices,

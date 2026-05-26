@@ -15,10 +15,11 @@ export function useChapter(
   bookId: string | null | undefined,
   chapter: number | null | undefined,
   translationId: string,
+  enabled = true,
 ) {
   return useQuery<ChapterApiResponse>({
     queryKey: ["bible-chapter", bookId, chapter, translationId],
-    enabled: !!bookId && chapter != null,
+    enabled: enabled && !!bookId && chapter != null,
     staleTime: 60 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
     queryFn: ({ signal }) =>

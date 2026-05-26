@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import Link from "next/link";
 import { LoungeToggle } from "@/components/lounge/LoungeToggle";
 import { BibleReader } from "./BibleReader";
@@ -10,8 +18,18 @@ import { Lane } from "./Lane";
 import { DotSheet } from "./DotSheet";
 import { NewDotComposer } from "./NewDotComposer";
 import { ConnectorOverlay } from "./ConnectorOverlay";
-import { StrongsFoundBand } from "./StrongsFoundBand";
 import { CrossRefBand } from "./CrossRefBand";
+import { CommentaryPanel } from "./CommentaryPanel";
+import { StrongsPanel } from "./StrongsPanel";
+import { GridSplitPane } from "./GridSplitPane";
+import { GridTabDragProvider } from "./GridTabDragContext";
+import { GridTab, GridTabList, GridTabPanel, GridTabs } from "./GridTabs";
+import {
+  GRID_TAB_LABELS,
+  type GridPane,
+  type GridTabId,
+} from "@/lib/grid/gridTabLayout";
+import { useGridTabLayout } from "@/lib/grid/useGridTabLayout";
 import { TimelineSettingsSheet } from "./TimelineSettingsSheet";
 import {
   BibleHeaderSlot,
@@ -68,7 +86,38 @@ export function GridCanvas({
 }: GridCanvasProps) {
   const panRef = useRef<HTMLDivElement | null>(null);
   const lanesScrollRef = useRef<HTMLDivElement | null>(null);
+  const overlayHostRef = useRef<HTMLDivElement | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const {
+    layout: tabLayout,
+    activeLeftTab,
+    activeRightTab,
+    setActiveLeftTab,
+    setActiveRightTab,
+    journalActive,
+    tabDragState,
+    handleTabDragStart,
+    setTabDropTarget,
+    handleTabDragEnd,
+    handleTabDrop,
+  } = useGridTabLayout();
+
+  const tabDragApi = useMemo(
+    () => ({
+      dragState: tabDragState,
+      onDragStart: handleTabDragStart,
+      onDragEnd: handleTabDragEnd,
+      onDrop: handleTabDrop,
+      setDropTarget: setTabDropTarget,
+    }),
+    [
+      tabDragState,
+      handleTabDragStart,
+      handleTabDragEnd,
+      handleTabDrop,
+      setTabDropTarget,
+    ],
+  );
 
   const pxPerDay = useGridStore((s) => s.pxPerDay);
   const panByPx = useGridStore((s) => s.panByPx);
@@ -98,8 +147,12 @@ export function GridCanvas({
     return out;
   }, [timelines]);
 
-  // Track viewport width.
-  useEffect(() => {
+  // Track journal canvas width — `panRef` only attaches when the Journal panel
+  // mounts. Running once on [] misses that if another tab was active first or
+  // after tab switches, leaving viewportWidth at 0 and breaking lane layout /
+  // hiding the footer controls.
+  useLayoutEffect(() => {
+    if (!journalActive) return;
     const el = panRef.current;
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
@@ -108,7 +161,7 @@ export function GridCanvas({
     ro.observe(el);
     setViewportWidth(el.clientWidth);
     return () => ro.disconnect();
-  }, []);
+  }, [journalActive]);
 
   // Pan via pointer drag. Day cells, dots, and the "+ Add" pill are all
   // `<button>`s that cover most of the lane, so we can't bail out of the
@@ -249,6 +302,7 @@ export function GridCanvas({
   // so the two navigations don't fight over the same keys.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!journalActive) return;
       if (e.target instanceof HTMLInputElement) return;
       if (e.target instanceof HTMLTextAreaElement) return;
       const px = useGridStore.getState().pxPerDay;
@@ -264,7 +318,7 @@ export function GridCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [zoomAt, recenterOnToday]);
+  }, [zoomAt, recenterOnToday, journalActive]);
 
   const [activeDotId, setActiveDotId] = useState<string | null>(null);
   const activeDot = useMemo(
@@ -298,7 +352,6 @@ export function GridCanvas({
   const [hoverDotId, setHoverDotId] = useState<string | null>(null);
   const [hoverBookId, setHoverBookId] = useState<string | null>(null);
   const [showAllConnectors, setShowAllConnectors] = useState(false);
-  const overlayHostRef = useRef<HTMLDivElement | null>(null);
 
   const currentZoom = useMemo(() => zoomLevelFor(pxPerDay), [pxPerDay]);
   const selectedBookId = useGridStore((s) => s.selectedBookId);
@@ -417,6 +470,120 @@ export function GridCanvas({
     [handleDeleteTimeline],
   );
 
+  const renderGridTabPanel = useCallback(
+    (tabId: GridTabId) => {
+      switch (tabId) {
+        case "journal":
+          return (
+            <>
+              {selectedBookId && (
+                <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-rule)] bg-[var(--color-ink)]/90 px-4 py-1.5 text-[11px] text-[var(--color-paper)]">
+                  <span className="uppercase tracking-widest">
+                    Filtered to{" "}
+                    <span className="font-semibold">{selectedBookId}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBookId(null)}
+                    className="rounded-full px-2 py-0.5 text-xs hover:bg-white/10"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+              <div
+                ref={panRef}
+                className="paper relative flex min-h-0 flex-1 cursor-grab flex-col overflow-hidden select-none active:cursor-grabbing"
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                onWheel={onWheel}
+              >
+                <div
+                  ref={lanesScrollRef}
+                  className="relative min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
+                >
+                  {timelines.map((t, idx) => (
+                    <Lane
+                      key={t.id}
+                      timeline={t}
+                      accent={accents.get(t.id) ?? "var(--color-ink)"}
+                      viewportWidth={viewportWidth}
+                      dots={filteredDots}
+                      onAdd={(date) => openComposerForTimeline(t, date)}
+                      onOpenDot={handleOpenDot}
+                      onHoverDot={setHoverDotId}
+                      onRename={handleRenameTimeline}
+                      onDelete={handleDeleteTimeline}
+                      onOpenSettings={handleOpenSettings}
+                      isDragging={dragState?.draggingId === t.id}
+                      isDropTarget={dragState?.dropIndex === idx}
+                      laneIndex={idx}
+                      onDragStart={handleDragStart}
+                      onDragOverLane={setDropIndex}
+                      onDragEnd={handleDragEnd}
+                      onDrop={handleDrop}
+                    />
+                  ))}
+                  {timelines.length > 0 && (
+                    <TrailingDropZone
+                      index={timelines.length}
+                      isActive={dragState?.dropIndex === timelines.length}
+                      onDragOverLane={setDropIndex}
+                      onDrop={handleDrop}
+                    />
+                  )}
+                </div>
+                <TimeRuler viewportWidth={viewportWidth} />
+              </div>
+              <TimelineControls
+                zoom={currentZoom}
+                onZoom={setZoom}
+                onToday={recenterOnToday}
+                showAllConnectors={showAllConnectors}
+                onToggleConnectors={() => setShowAllConnectors((v) => !v)}
+                onNewTimeline={handleNewTimeline}
+              />
+            </>
+          );
+        case "commentary":
+          return <CommentaryPanel />;
+        case "strongs":
+          return <StrongsPanel />;
+        default:
+          return null;
+      }
+    },
+    [
+      selectedBookId,
+      setSelectedBookId,
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onWheel,
+      timelines,
+      accents,
+      viewportWidth,
+      filteredDots,
+      openComposerForTimeline,
+      handleOpenDot,
+      handleRenameTimeline,
+      handleDeleteTimeline,
+      handleOpenSettings,
+      dragState,
+      handleDragStart,
+      setDropIndex,
+      handleDragEnd,
+      handleDrop,
+      currentZoom,
+      setZoom,
+      recenterOnToday,
+      showAllConnectors,
+      handleNewTimeline,
+    ],
+  );
+
   return (
     <BibleHeaderSlotProvider>
     <div className="flex h-full flex-col bg-[var(--color-paper)]">
@@ -426,105 +593,46 @@ export function GridCanvas({
         className="relative flex flex-1 flex-col overflow-hidden"
       >
         <BibleReader />
-        <StrongsFoundBand />
         <CrossRefBand />
         <BooksLane dots={dots} onHoverBook={setHoverBookId} />
-        {selectedBookId && (
-          <div className="flex items-center justify-between border-b border-[var(--color-rule)] bg-[var(--color-ink)]/90 px-4 py-1.5 text-[11px] text-[var(--color-paper)]">
-            <span className="uppercase tracking-widest">
-              Filtered to <span className="font-semibold">{selectedBookId}</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => setSelectedBookId(null)}
-              className="rounded-full px-2 py-0.5 text-xs hover:bg-white/10"
-            >
-              Clear
-            </button>
-          </div>
-        )}
-        <div
-          ref={panRef}
-          className="paper relative flex flex-1 cursor-grab flex-col overflow-hidden select-none active:cursor-grabbing"
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          onWheel={onWheel}
-        >
-          {/* Scrollable lanes stack. Horizontal panning is handled by
-              re-centering via pxPerDay/centerDate (not native scroll), so
-              we only expose vertical scrolling here — the stack grows
-              when the user adds timelines and we want them reachable
-              without squeezing existing lanes. */}
-          <div
-            ref={lanesScrollRef}
-            className="relative flex-1 overflow-x-hidden overflow-y-auto"
-          >
-            {timelines.map((t, idx) => (
-              <Lane
-                key={t.id}
-                timeline={t}
-                accent={accents.get(t.id) ?? "var(--color-ink)"}
-                viewportWidth={viewportWidth}
-                dots={filteredDots}
-                onAdd={(date) => openComposerForTimeline(t, date)}
-                onOpenDot={handleOpenDot}
-                onHoverDot={setHoverDotId}
-              onRename={handleRenameTimeline}
-              onDelete={handleDeleteTimeline}
-              onOpenSettings={handleOpenSettings}
-              isDragging={dragState?.draggingId === t.id}
-                isDropTarget={dragState?.dropIndex === idx}
-                laneIndex={idx}
-                onDragStart={handleDragStart}
-                onDragOverLane={setDropIndex}
-                onDragEnd={handleDragEnd}
-                onDrop={handleDrop}
+
+        <GridTabDragProvider value={tabDragApi}>
+          <GridSplitPane
+            left={
+              <GridPaneTabs
+                pane="left"
+                tabIds={tabLayout.left}
+                activeId={activeLeftTab}
+                onActiveIdChange={setActiveLeftTab}
+                renderPanel={renderGridTabPanel}
               />
-            ))}
-            {/* Trailing drop zone lets the user land a drag at the very
-                bottom (position = timelines.length) without having to
-                hover the lower half of the last lane — that's a fiddly
-                gesture. */}
-            {timelines.length > 0 && (
-              <TrailingDropZone
-                index={timelines.length}
-                isActive={dragState?.dropIndex === timelines.length}
-                onDragOverLane={setDropIndex}
-                onDrop={handleDrop}
+            }
+            right={
+              <GridPaneTabs
+                pane="right"
+                tabIds={tabLayout.right}
+                activeId={activeRightTab}
+                onActiveIdChange={setActiveRightTab}
+                renderPanel={renderGridTabPanel}
               />
-            )}
-          </div>
-          {/* Date header sits at the bottom of the canvas, directly above
-              the footer nav, so tick labels are next to the zoom controls
-              that drive their granularity. Keeping it inside the pan
-              container means wheel/drag zoom + pan still work over the
-              ruler region. */}
-          <TimeRuler viewportWidth={viewportWidth} />
-        </div>
+            }
+          />
+        </GridTabDragProvider>
 
         {/* Connector lines from dots up to the books they reference. Sits
             over BooksLane + lanes so the SVG can span both regions. */}
-        <ConnectorOverlay
-          containerRef={overlayHostRef}
-          scrollContainerRef={lanesScrollRef}
-          dots={filteredDots}
-          hoverDotId={hoverDotId}
-          hoverBookId={hoverBookId}
-          selectedBookId={selectedBookId}
-          showAll={showAllConnectors}
-        />
+        {journalActive && (
+          <ConnectorOverlay
+            containerRef={overlayHostRef}
+            scrollContainerRef={lanesScrollRef}
+            dots={filteredDots}
+            hoverDotId={hoverDotId}
+            hoverBookId={hoverBookId}
+            selectedBookId={selectedBookId}
+            showAll={showAllConnectors}
+          />
+        )}
       </div>
-
-      <TimelineControls
-        zoom={currentZoom}
-        onZoom={setZoom}
-        onToday={recenterOnToday}
-        showAllConnectors={showAllConnectors}
-        onToggleConnectors={() => setShowAllConnectors((v) => !v)}
-        onNewTimeline={handleNewTimeline}
-      />
 
       <DotSheet
         dot={activeDot}
@@ -598,10 +706,53 @@ function TrailingDropZone({
   );
 }
 
-// Top-level app navigation: brand, cross-app links, account. Deliberately
-// does not include any timeline-canvas controls — those live in
-// <TimelineControls /> so they can sit directly above the lanes they
-// operate on.
+const GRID_TAB_PANEL_CLASS: Record<GridTabId, string> = {
+  journal: "relative min-h-0 flex-1",
+  commentary: "min-h-0 flex-1",
+  strongs: "min-h-0 flex-1",
+};
+
+function GridPaneTabs({
+  pane,
+  tabIds,
+  activeId,
+  onActiveIdChange,
+  renderPanel,
+}: {
+  pane: GridPane;
+  tabIds: GridTabId[];
+  activeId: GridTabId;
+  onActiveIdChange: (id: GridTabId) => void;
+  renderPanel: (id: GridTabId) => ReactNode;
+}) {
+  const ariaLabel = pane === "left" ? "Left panels" : "Right panels";
+  return (
+    <GridTabs
+      activeId={activeId}
+      onActiveIdChange={(id) => onActiveIdChange(id as GridTabId)}
+    >
+      <GridTabList pane={pane} tabCount={tabIds.length} ariaLabel={ariaLabel}>
+        {tabIds.map((id, tabIndex) => (
+          <GridTab
+            key={id}
+            pane={pane}
+            tabIndex={tabIndex}
+            id={id}
+            label={GRID_TAB_LABELS[id]}
+          />
+        ))}
+      </GridTabList>
+      {tabIds.map((id) => (
+        <GridTabPanel key={id} id={id} className={GRID_TAB_PANEL_CLASS[id]}>
+          {renderPanel(id)}
+        </GridTabPanel>
+      ))}
+    </GridTabs>
+  );
+}
+
+// Top-level app navigation: brand, cross-app links, account. Timeline canvas
+// controls live in <TimelineControls /> at the bottom of the Journal tab.
 function TopNav({ displayName }: { displayName?: string | null }) {
   return (
     <header className="flex items-center gap-3 border-b border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-1">
@@ -657,9 +808,8 @@ function TopNav({ displayName }: { displayName?: string | null }) {
 }
 
 // Controls that operate on the timeline canvas: zoom granularity, recenter,
-// connector visibility, timeline creation. Rendered as the page footer so
-// vertical space above is maximized for the lanes stack (which can now
-// scroll when more timelines exist than fit on screen).
+// connector visibility, timeline creation. Rendered at the bottom of the
+// Journal tab so the commentary column can use the full pane height.
 function TimelineControls({
   zoom,
   onZoom,
@@ -677,7 +827,7 @@ function TimelineControls({
 }) {
   const levels: ZoomLevel[] = ["day", "week", "month", "quarter", "year"];
   return (
-    <footer className="flex items-center justify-between gap-3 border-t border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-1">
+    <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-1">
       <span className="hidden text-[10px] text-[var(--color-ink-2)] sm:inline">
         Drag to pan · Shift/horizontal scroll to pan · Cmd/Ctrl + scroll to zoom · T for today
       </span>

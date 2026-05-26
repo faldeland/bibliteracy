@@ -26,9 +26,8 @@ interface VerseCrossRefSpokesProps {
 }
 
 /**
- * SVG spokes from the active verse to each cross-reference target. Always
- * anchored on the books baseline — unlike Harrison semicircles, long spans
- * stay connected at both endpoints in a compact band.
+ * SVG spokes from the active verse to each cross-reference target, anchored
+ * on the books baseline at the bottom of the strip track.
  */
 export function VerseCrossRefSpokes({
   width,
@@ -51,7 +50,7 @@ export function VerseCrossRefSpokes({
 
   return (
     <svg
-      className="absolute inset-0 overflow-visible"
+      className="absolute inset-0 z-10 overflow-visible"
       width={width}
       height={height}
       viewBox={`0 0 ${width} ${height}`}

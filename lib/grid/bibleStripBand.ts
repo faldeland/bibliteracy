@@ -1,10 +1,10 @@
-/** Label row above the baseline track in bible-strip bands (FOUND, XREFS). */
+/** Label row above the baseline track in the bible-strip band above BooksLane. */
 export const BIBLE_STRIP_LABEL_ROW_PX = 14;
 
 /** Drawing area for baseline, dots, and spokes. */
 export const BIBLE_STRIP_TRACK_HEIGHT_PX = 22;
 
-/** Total fixed height for FOUND / xref bands above BooksLane (not resizable). */
+/** Total fixed height for the xref band above BooksLane (not resizable). */
 export const BIBLE_STRIP_BAND_HEIGHT =
   BIBLE_STRIP_LABEL_ROW_PX + BIBLE_STRIP_TRACK_HEIGHT_PX;
 

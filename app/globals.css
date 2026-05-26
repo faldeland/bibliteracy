@@ -44,3 +44,12 @@ body {
 .no-scrollbar {
   scrollbar-width: none;
 }
+
+/* Lounge stream bar: keep LiveKit device menus above the grid and unclipped. */
+.lounge-livekit .lk-device-menu {
+  z-index: 60;
+}
+
+.lounge-livekit .lounge-participant-video {
+  background-color: #000;
+}

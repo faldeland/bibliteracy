@@ -493,9 +493,16 @@ export function BibleReader() {
   const bibleNavigationSeq = useGridStore((s) => s.bibleNavigationSeq);
   const bibleNavigationTarget = useGridStore((s) => s.bibleNavigationTarget);
   useEffect(() => {
-    setCurrentBibleRef({ book: bookId, chapter, verseStart: verse });
+    const verseStart =
+      contextCount > 0 ? Math.max(1, verse - contextCount) : verse;
+    setCurrentBibleRef({
+      book: bookId,
+      chapter,
+      verseStart,
+      verseEnd: verse,
+    });
     return () => setCurrentBibleRef(null);
-  }, [bookId, chapter, verse, setCurrentBibleRef]);
+  }, [bookId, chapter, verse, contextCount, setCurrentBibleRef]);
 
   useEffect(() => {
     if (!bibleNavigationTarget || bibleNavigationSeq === 0) return;
@@ -625,7 +632,7 @@ export function BibleReader() {
   }, [studyVerse]);
 
   // ── Strong's highlight + popover ──────────────────────────────────────
-  // Hover drives FOUND / token styling only. Click opens the word-study
+  // Hover drives xref-band / token styling only. Click opens the word-study
   // popover. Leaving a token (without entering another) locks the highlight.
 
   const [hoveredStrong, setHoveredStrong] = useState<string | null>(null);
@@ -667,11 +674,16 @@ export function BibleReader() {
   const onTokenClick = useCallback(
     (strong: string, el: HTMLElement) => {
       clearTokenLeaveTimer();
-      setHoveredStrong(null);
       setPinnedStrong(strong);
+      if (popover?.strong === strong) {
+        setPopover(null);
+        setHoveredStrong(strong);
+        return;
+      }
+      setHoveredStrong(null);
       setPopover({ strong, rect: el.getBoundingClientRect() });
     },
-    [clearTokenLeaveTimer, setPinnedStrong],
+    [clearTokenLeaveTimer, popover, setPinnedStrong],
   );
 
   // Close popover when user clicks outside it (highlight stays locked).
@@ -1614,8 +1626,7 @@ function StrongsOccurrencesSection({
   strong: string;
   onNavigate(target: BibleNavTarget): void;
 }) {
-  const [versesExpanded, setVersesExpanded] = useState(false);
-  const [xrefsExpanded, setXrefsExpanded] = useState(false);
+  const [listExpanded, setListExpanded] = useState(false);
   const [verseState, setVerseState] = useState<
     | { kind: "loading" }
     | { kind: "ready"; count: number; verses: StrongsOccurrenceVerse[] }
@@ -1628,8 +1639,7 @@ function StrongsOccurrencesSection({
   >({ kind: "loading" });
 
   useEffect(() => {
-    setVersesExpanded(false);
-    setXrefsExpanded(false);
+    setListExpanded(false);
     setVerseState({ kind: "loading" });
     setXrefState({ kind: "loading" });
     const ctl = new AbortController();
@@ -1678,15 +1688,40 @@ function StrongsOccurrencesSection({
   const loading =
     verseState.kind === "loading" || xrefState.kind === "loading";
 
+  const verseCount =
+    verseState.kind === "ready" ? verseState.count : 0;
+  const xrefCount = xrefState.kind === "ready" ? xrefState.count : 0;
+  const listCount = verseCount + xrefCount;
+
+  const summaryParts: string[] = [];
+  if (verseState.kind === "ready") {
+    summaryParts.push(
+      verseCount === 0
+        ? "Not found in KJV interlinear"
+        : verseCount === 1
+          ? "1 verse"
+          : `${verseCount.toLocaleString()} verses`,
+    );
+  }
+  if (xrefState.kind === "ready") {
+    summaryParts.push(
+      xrefCount === 0
+        ? "No xrefs"
+        : xrefCount === 1
+          ? "1 xref"
+          : `${xrefCount.toLocaleString()} xrefs`,
+    );
+  }
+
   return (
     <div className="mb-2 border-b border-[var(--color-rule)]/70 pb-2">
       <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink-2)]">
-        In the Bible
+        Cross-references
       </div>
 
       {loading && (
         <p className="mt-1 text-[11px] text-[var(--color-ink-2)]">
-          Counting occurrences…
+          Loading occurrences and xrefs…
         </p>
       )}
 
@@ -1697,106 +1732,79 @@ function StrongsOccurrencesSection({
         <p className="mt-1 text-[11px] text-rose-700">{xrefState.message}</p>
       )}
 
-      {verseState.kind === "ready" && (
+      {!loading && summaryParts.length > 0 && (
         <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-[12px] text-[var(--color-ink)]">
-            {verseState.count === 0
-              ? "Not found in KJV interlinear"
-              : verseState.count === 1
-                ? "1 verse"
-                : `${verseState.count.toLocaleString()} verses`}
+            {summaryParts.join(" · ")}
           </span>
-          {verseState.count > 0 && (
+          {listCount > 0 && (
             <button
               type="button"
-              onClick={() => setVersesExpanded((v) => !v)}
+              onClick={() => setListExpanded((v) => !v)}
               className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink)] underline decoration-[var(--color-rule)] underline-offset-2 hover:decoration-[var(--color-ink-2)]"
-              aria-expanded={versesExpanded}
+              aria-expanded={listExpanded}
             >
-              {versesExpanded ? "Hide verses" : "View all verses"}
+              {listExpanded ? "Hide list" : "View all"}
             </button>
           )}
         </div>
       )}
 
-      {verseState.kind === "ready" && versesExpanded && verseState.count > 0 && (
+      {listExpanded && listCount > 0 && (
         <ul
           className="mt-1.5 max-h-48 overflow-y-auto rounded border border-[var(--color-rule)]/60 bg-[var(--color-paper-2)]/40 py-1"
           role="list"
         >
-          {verseState.verses.map((v) => (
-            <li key={`${v.book}:${v.chapter}:${v.verse}`}>
-              <button
-                type="button"
-                onClick={() =>
-                  onNavigate({
-                    bookId: v.book,
-                    chapter: v.chapter,
-                    verse: v.verse,
-                  })
-                }
-                className="block w-full px-2 py-0.5 text-left font-serif text-[12px] text-[var(--color-ink)] hover:bg-black/5"
-              >
-                {v.label}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {xrefState.kind === "ready" && (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-          <span className="text-[12px] text-[var(--color-ink)]">
-            {xrefState.count === 0
-              ? "No xrefs"
-              : xrefState.count === 1
-                ? "1 xref"
-                : `${xrefState.count.toLocaleString()} xrefs`}
-          </span>
-          {xrefState.count > 0 && (
-            <button
-              type="button"
-              onClick={() => setXrefsExpanded((v) => !v)}
-              className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-ink)] underline decoration-[var(--color-rule)] underline-offset-2 hover:decoration-[var(--color-ink-2)]"
-              aria-expanded={xrefsExpanded}
-            >
-              {xrefsExpanded ? "Hide xrefs" : "View all xrefs"}
-            </button>
-          )}
-        </div>
-      )}
-
-      {xrefState.kind === "ready" && xrefsExpanded && xrefState.count > 0 && (
-        <ul
-          className="mt-1.5 max-h-48 overflow-y-auto rounded border border-[var(--color-rule)]/60 bg-[var(--color-paper-2)]/40 py-1"
-          role="list"
-        >
-          {xrefState.xrefs.map((x) => (
-            <li key={`${x.fromVerseLabel}:${x.toLabel}:${x.category}`}>
-              <button
-                type="button"
-                onClick={() =>
-                  onNavigate({
-                    bookId: x.to.book,
-                    chapter: x.to.chapter,
-                    verse: x.to.verseStart ?? 1,
-                  })
-                }
-                title={`${XREF_CATEGORY_LABEL[x.category] ?? x.category} — ${x.note}`}
-                className="block w-full px-2 py-1 text-left hover:bg-black/5"
-              >
-                <span className="font-serif text-[12px] text-[var(--color-ink)]">
-                  {x.toLabel}
-                </span>
-                <span className="ml-1.5 text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]">
-                  {XREF_CATEGORY_LABEL[x.category] ?? x.category}
-                </span>
-                <span className="mt-0.5 block text-[10px] text-[var(--color-ink-2)]">
-                  from {x.fromVerseLabel}
-                </span>
-              </button>
-            </li>
-          ))}
+          {verseState.kind === "ready" &&
+            verseState.verses.map((v) => (
+              <li key={`occ:${v.book}:${v.chapter}:${v.verse}`}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onNavigate({
+                      bookId: v.book,
+                      chapter: v.chapter,
+                      verse: v.verse,
+                    })
+                  }
+                  className="block w-full px-2 py-0.5 text-left hover:bg-black/5"
+                >
+                  <span className="font-serif text-[12px] text-[var(--color-ink)]">
+                    {v.label}
+                  </span>
+                  <span className="ml-1.5 text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]">
+                    Occurrence
+                  </span>
+                </button>
+              </li>
+            ))}
+          {xrefState.kind === "ready" &&
+            xrefState.xrefs.map((x) => (
+              <li key={`xref:${x.fromVerseLabel}:${x.toLabel}:${x.category}`}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onNavigate({
+                      bookId: x.to.book,
+                      chapter: x.to.chapter,
+                      verse: x.to.verseStart ?? 1,
+                    })
+                  }
+                  title={`${XREF_CATEGORY_LABEL[x.category] ?? x.category} — ${x.note}`}
+                  className="block w-full px-2 py-1 text-left hover:bg-black/5"
+                >
+                  <span className="font-serif text-[12px] text-[var(--color-ink)]">
+                    {x.toLabel}
+                  </span>
+                  <span className="ml-1.5 text-[9px] uppercase tracking-widest text-[var(--color-ink-2)]">
+                    {XREF_CATEGORY_LABEL[x.category] ?? x.category}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-[var(--color-ink-2)]">
+                    from {x.fromVerseLabel}
+                  </span>
+                </button>
+              </li>
+            ))}
         </ul>
       )}
     </div>

@@ -1,5 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
+import { ensureLoungeRoom } from "@/lib/lounge/ensureLoungeRoom";
+import {
+  isLiveKitPlaceholderConfig,
+  livekitApiKey,
+  livekitApiSecret,
+  livekitWsUrl,
+} from "@/lib/lounge/livekitEnv";
+import { loungeRoomNameForUser } from "@/lib/lounge/loungeRoomName";
 import { createClient } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -19,13 +27,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "roomName required" }, { status: 400 });
   }
 
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  const wsUrl = process.env.NEXT_PUBLIC_LIVEKIT_URL;
+  const apiKey = livekitApiKey();
+  const apiSecret = livekitApiSecret();
+  const wsUrl = livekitWsUrl();
 
   if (!apiKey || !apiSecret || !wsUrl) {
     return NextResponse.json(
       { error: "LiveKit not configured on server" },
+      { status: 503 },
+    );
+  }
+
+  if (isLiveKitPlaceholderConfig()) {
+    return NextResponse.json(
+      {
+        error:
+          "LiveKit still uses placeholder values in .env.local — set NEXT_PUBLIC_LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET from cloud.livekit.io",
+      },
       { status: 503 },
     );
   }
@@ -56,6 +74,14 @@ export async function POST(req: NextRequest) {
           { error: "Not authorized for this room" },
           { status: 403 },
         );
+      }
+
+      if (roomName === loungeRoomNameForUser(user.id)) {
+        try {
+          await ensureLoungeRoom(supabase, user.id);
+        } catch (e) {
+          console.warn("[livekit/token] ensure lounge room:", e);
+        }
       }
     }
   } catch (e) {
@@ -99,7 +125,9 @@ async function isAuthorizedForRoom(
     .eq("livekit_room_name", roomName)
     .maybeSingle();
 
-  if (!room) return false;
+  if (!room) {
+    return roomName === loungeRoomNameForUser(userId);
+  }
   if (room.owner_id === userId) return true;
 
   if (room.kind === "lounge") {
